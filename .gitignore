@@ -1,0 +1,31 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Logs
+logs/
+*.log
+
+# Scraped Data
+data/
+*.csv
+!data/.gitkeep # Optional: to keep the data/ directory tracked even if empty
+
+# Debug dumps (screenshots, page sources)
+debug_dumps/
+
+# Sensitive configuration file
+# IMPORTANT: If your config.ini contains sensitive data (passwords, API keys),
+# you MUST ignore it. Instead, create a config.ini.example (see step 4).
+config.ini
+
+# IDE and OS generated files
+.idea/ # For PyCharm or IntelliJ IDEA
+.vscode/ # For VS Code
+.DS_Store # macOS specific
+Thumbs.db # Windows specific
