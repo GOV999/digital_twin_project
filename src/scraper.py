@@ -2,57 +2,35 @@ import os
 import logging
 from datetime import datetime, timezone
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-from webdriver_manager.chrome import ChromeDriverManager # Ensure this is installed: pip install webdriver-manager
+from webdriver_manager.chrome import ChromeDriverManager
 import configparser
-import time # Essential for time.sleep()
-import pytz # Essential for timezone handling (pip install pytz)
+import time
+import pytz
 
 # Import your custom database manager
-import db_manager
+from . import db_manager
 
 # --- Configuration & Path Setup ---
-# Calculate the base directory of the project (digital_twin_project/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Define paths for logs and debug dumps relative to BASE_DIR
 LOG_DIR = os.path.join(BASE_DIR, 'logs')
 DEBUG_DUMPS_DIR = os.path.join(BASE_DIR, 'debug_dumps')
 SCREENSHOT_DIR = os.path.join(DEBUG_DUMPS_DIR, 'screenshots')
 PAGE_SOURCE_DIR = os.path.join(DEBUG_DUMPS_DIR, 'page_sources')
 
-# Ensure directories exist
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(PAGE_SOURCE_DIR, exist_ok=True)
 
-log_file = os.path.join(LOG_DIR, 'scraper.log')
-
-# --- Logging Setup ---
+# --- Logging Setup (Minimal for Module - Main.py handles global setup) ---
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO) # Set to logging.DEBUG for more verbose output
 
-# Create file handler
-fh = logging.FileHandler(log_file)
-fh.setLevel(logging.INFO)
-
-# Create console handler
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-# Create formatter and add it to the handlers
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-fh.setFormatter(formatter)
-ch.setFormatter(formatter)
-
-# Add the handlers to the logger (avoid duplicate handlers if script is reloaded/run in session)
-if not logger.handlers:
-    logger.addHandler(fh)
-    logger.addHandler(ch)
 
 # --- Load Configuration from config.ini ---
 config = configparser.ConfigParser()
@@ -65,29 +43,28 @@ if not os.path.exists(config_path):
 try:
     config.read(config_path)
 
-    # Scraper Configuration
-    LOGIN_URL = config.get('Scraper', 'LOGIN_URL')
-    DASHBOARD_URL = config.get('Scraper', 'DASHBOARD_URL')
-    TABLE_PAGE_URL = config.get('Scraper', 'TABLE_PAGE_URL')
-    RELOAD_INTERVAL_SECONDS = config.getint('Scraper', 'RELOAD_INTERVAL_SECONDS')
+    LOGIN_URL = config.get('Scraper', 'login_url')
+    BASE_METER_DETAILS_URL = config.get('Scraper', 'base_meter_details_url')
+    METER_ID = config.get('Scraper', 'meter_id')
+    METER_NUMBER = config.get('Scraper', 'meter_number')
+    RELOAD_INTERVAL_SECONDS = config.getint('Scraper', 'reload_interval_seconds')
+
+    # Dynamically construct the full URL for the meter details page based on config values
+    TABLE_PAGE_URL = f"{BASE_METER_DETAILS_URL}{METER_ID}/MeterNumber/{METER_NUMBER}"
 
 except Exception as e:
     logger.critical(f"Error loading configuration from config.ini: {e}", exc_info=True)
     exit(1)
 
 # --- Define Timezone for Storage ---
-# Define the timezone of the data scraped from the website, which will also be your storage timezone
-# IST is UTC+5:30, recognized as 'Asia/Kolkata' by pytz
 TARGET_STORAGE_TIMEZONE = pytz.timezone('Asia/Kolkata')
 
 
 # --- Selectors ---
-TABLE_ROW_SELECTOR = (By.CSS_SELECTOR, 'table.table.customTable tbody tr') # Selects all rows in the table body
-TABLE_HEADER_SELECTOR = (By.CSS_SELECTOR, 'table.table.customTable thead th') # Selects all table headers
+TABLE_ROW_SELECTOR = (By.CSS_SELECTOR, 'table.table.customTable tbody tr')
+TABLE_HEADER_SELECTOR = (By.CSS_SELECTOR, 'table.table.customTable thead th')
 
 # --- Target Columns for Data Extraction ---
-# These must EXACTLY match the website's table headers.
-# Ensure 'Cumulative energy, kVAh (Export)' is only listed once.
 TARGET_COLUMNS = [
     "Sl.",
     "Meter No.",
@@ -105,38 +82,64 @@ TARGET_COLUMNS = [
     "Network Info"
 ]
 
-# --- Helper Functions ---
+# --- Helper Functions (DEFINED BEFORE main() to avoid NameError) ---
+
+def capture_debug_info(driver, filename_prefix="error"):
+    """Captures screenshot and page source for debugging."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    screenshot_path = os.path.join(SCREENSHOT_DIR, f"{filename_prefix}_{timestamp}.png")
+    page_source_path = os.path.join(PAGE_SOURCE_DIR, f"{filename_prefix}_{timestamp}.html")
+
+    try:
+        driver.save_screenshot(screenshot_path)
+        logger.error(f"Screenshot saved to: {screenshot_path}")
+    except Exception as e:
+        logger.error(f"Failed to save screenshot: {e}")
+
+    try:
+        with open(page_source_path, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        logger.error(f"Page source saved to: {page_source_path}")
+    except Exception as e:
+        logger.error(f"Failed to save page source: {e}")
+
+def initialize_webdriver():
+    """Initializes and returns a Chrome WebDriver."""
+    options = webdriver.ChromeOptions()
+    # options.add_argument('--headless') # Keep this commented for manual login
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--window-size=1280,800') # Set a consistent window size for visibility
+    options.add_argument('--ignore-certificate-errors') # For self-signed certs
+    # options.add_argument('--disable-gpu') # Applicable for headless in some environments
+
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    logger.info("WebDriver initialized successfully (browser window opened).")
+    return driver
+
 def parse_datetime(dt_str):
     """
     Parses a date-time string from the webpage into a timezone-aware
     datetime object, localized to the TARGET_STORAGE_TIMEZONE (IST).
-    Expected format: 'DD/MM/YYYY HH:MM'
+    Expected format: 'DD/MM/YYYY HH:MM'.
     """
     if not dt_str:
         return None
     try:
-        # Parse the string into a naive datetime object
         naive_dt_object = datetime.strptime(dt_str, '%d/%m/%Y %H:%M')
-
-        # Localize the naive datetime object to the target storage timezone (IST)
-        # This will attach the +05:30 offset to your datetime object.
-        localized_dt_object = TARGET_STORAGE_TIMEZONE.localize(naive_dt_object)
-
-        # Return this localized datetime object directly.
-        # The database will store it with its IST timezone information.
-        return localized_dt_object
+        return naive_dt_object.replace(tzinfo=db_manager.get_timezone())
     except ValueError as e:
         logger.error(f"Failed to parse datetime string '{dt_str}': {e}. Returning None.")
         return None
 
-def process_raw_data(raw_data, meter_no_override=None):
+def process_raw_data(raw_data, config_meter_id, config_meter_number):
     """
     Processes a dictionary of raw scraped data into the format
     expected by the database, handling parsing and type conversions.
+    It explicitly takes meter_id and meter_no from config.
     """
     processed = {}
-
-    # Map scraped data (keys are webpage headers) to database column names
     column_map = {
         'Meter No.': 'meter_no',
         'Real time clock, date and time': 'timestamp',
@@ -153,28 +156,27 @@ def process_raw_data(raw_data, meter_no_override=None):
         'Network Info': 'network_info'
     }
 
-    # Use hardcoded meter_no if provided, otherwise try to get from scraped data
-    processed['meter_no'] = meter_no_override if meter_no_override else raw_data.get('Meter No.', '')
-    if not processed['meter_no']:
-        logger.warning(f"Could not determine meter_no for row: {raw_data}. Skipping row.")
-        return None
+    processed['meter_id'] = config_meter_id
+    processed['meter_no'] = config_meter_number
 
-    # Handle Timestamp
+    scraped_meter_no_from_table = raw_data.get('Meter No.', '').strip()
+    if scraped_meter_no_from_table:
+        processed['meter_no'] = scraped_meter_no_from_table
+        logger.debug(f"Overriding meter_no with scraped value: {scraped_meter_no_from_table}")
+
     timestamp_str = raw_data.get('Real time clock, date and time', '')
     timestamp_obj = parse_datetime(timestamp_str)
     if not timestamp_obj:
-        logger.warning(f"Missing or invalid timestamp for meter {processed['meter_no']} in row: {raw_data}. Skipping row.")
+        logger.warning(f"Missing or invalid timestamp for meter ID {processed['meter_id']}, number {processed['meter_no']} in row: {raw_data}. Skipping row.")
         return None
     processed['timestamp'] = timestamp_obj
 
-    # Process other fields
     for scraped_col, db_col in column_map.items():
-        if db_col in ['meter_no', 'timestamp']: # Already handled
+        if db_col in ['meter_no', 'meter_id', 'timestamp']:
             continue
 
-        value = raw_data.get(scraped_col, '').replace(',', '').strip() # Remove commas from numbers
+        value = raw_data.get(scraped_col, '').replace(',', '').strip()
 
-        # Convert numeric fields to float, others to string
         if db_col.startswith(('voltage', 'current', 'energy')):
             try:
                 processed[db_col] = float(value) if value else None
@@ -182,7 +184,7 @@ def process_raw_data(raw_data, meter_no_override=None):
                 logger.warning(f"Could not convert '{value}' for {scraped_col} (DB: {db_col}) to float. Setting to None.")
                 processed[db_col] = None
         else:
-            processed[db_col] = value if value else None # Store as string, or None if empty
+            processed[db_col] = value if value else None
 
     return processed
 
@@ -236,13 +238,7 @@ def reselect_instant_partial_dropdowns(driver):
 
     except Exception as e:
         logger.error(f"Failed to select 'Instant Profile' -> 'Instant Partial' or wait for table data: {type(e).__name__} - {e}", exc_info=True)
-        screenshot_path = os.path.join(SCREENSHOT_DIR, f"dropdown_error_{timestamp_for_debug}.png")
-        driver.save_screenshot(screenshot_path)
-        logger.error(f"Screenshot saved to: {screenshot_path}")
-        page_source_path = os.path.join(PAGE_SOURCE_DIR, f"dropdown_error_page_source_{timestamp_for_debug}.html")
-        with open(page_source_path, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        logger.error(f"Page source saved to: {page_source_path}")
+        capture_debug_info(driver, f"dropdown_error_{timestamp_for_debug}")
         raise # Re-raise the exception to stop execution
 
 def extract_data_from_table(driver):
@@ -276,12 +272,11 @@ def extract_data_from_table(driver):
         logger.debug("Adding a 2-second buffer to allow all cell data to render...")
         time.sleep(2) # Buffer for cell data rendering
 
-        # Get headers
         headers = []
         header_elements = table.find_elements(*TABLE_HEADER_SELECTOR)
         if not header_elements:
-             logger.error("No table headers found. Check TABLE_HEADER_SELECTOR.")
-             return []
+            logger.error("No table headers found. Check TABLE_HEADER_SELECTOR.")
+            return []
 
         for th in header_elements:
             span_element = th.find_elements(By.TAG_NAME, "span")
@@ -310,8 +305,6 @@ def extract_data_from_table(driver):
             logger.info("No data rows found in the table's tbody to scrape.")
             return raw_readings
 
-        current_meter_id = "1000613" # Hardcoded, ideally dynamically extracted from URL/page
-
         for i, row_element in enumerate(rows_to_scrape_elements):
             if not row_element.text.strip():
                 logger.debug(f"Skipping empty row {i+1}.")
@@ -338,42 +331,22 @@ def extract_data_from_table(driver):
                 else:
                     if idx != -1: # Only warn if the column was expected but index was out of bounds
                         logger.warning(f"For scraped row {i+1}, target column '{target_col}' (expected index {idx}) is out of bounds for {len(all_cells_elements)} cells found.")
-                    raw_row_data[target_col] = ""
+                    raw_row_data[target_col] = "" # Set to empty string if column not found or out of bounds
 
-            # Only add to raw_readings if it has any meaningful content
             if any(value for value in raw_row_data.values() if value):
-                raw_row_data['Meter No.'] = raw_row_data.get('Meter No.', current_meter_id) # Ensure meter no is present
-                raw_readings.append(raw_row_data)
+                raw_readings.append(raw_row_data) # Appending raw data here, processing happens in main()
             else:
                 logger.debug(f"Skipping empty or mostly empty scraped row {i+1} from table.")
 
     except TimeoutException:
         logger.error("Timed out waiting for table data to load.")
-        screenshot_path = os.path.join(SCREENSHOT_DIR, f"scrape_timeout_error_{timestamp_for_debug}.png")
-        driver.save_screenshot(screenshot_path)
-        logger.error(f"Screenshot saved to: {screenshot_path}")
-        page_source_path = os.path.join(PAGE_SOURCE_DIR, f"scrape_timeout_error_page_source_{timestamp_for_debug}.html")
-        with open(page_source_path, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        logger.error(f"Page source saved to: {page_source_path}")
+        capture_debug_info(driver, f"scrape_timeout_error_{timestamp_for_debug}")
     except NoSuchElementException:
         logger.error("Table elements not found. Check selectors or page structure.")
-        screenshot_path = os.path.join(SCREENSHOT_DIR, f"scrape_noelement_error_{timestamp_for_debug}.png")
-        driver.save_screenshot(screenshot_path)
-        logger.error(f"Screenshot saved to: {screenshot_path}")
-        page_source_path = os.path.join(PAGE_SOURCE_DIR, f"scrape_noelement_error_page_source_{timestamp_for_debug}.html")
-        with open(page_source_path, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        logger.error(f"Page source saved to: {page_source_path}")
+        capture_debug_info(driver, f"scrape_noelement_error_{timestamp_for_debug}")
     except Exception as e:
         logger.exception(f"An unexpected error occurred during data extraction: {e}")
-        screenshot_path = os.path.join(SCREENSHOT_DIR, f"scrape_general_error_{timestamp_for_debug}.png")
-        driver.save_screenshot(screenshot_path)
-        logger.error(f"Screenshot saved to: {screenshot_path}")
-        page_source_path = os.path.join(PAGE_SOURCE_DIR, f"scrape_general_error_page_source_{timestamp_for_debug}.html")
-        with open(page_source_path, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        logger.error(f"Page source saved to: {page_source_path}")
+        capture_debug_info(driver, f"scrape_general_error_{timestamp_for_debug}")
     return raw_readings
 
 
@@ -382,72 +355,91 @@ def main():
     driver = None
     try:
         # Initialize DB pool
-        db_config = dict(config['Database'])
-        db_manager.initialize_db_pool(db_config)
+        db_manager.initialize_db_pool() # Removed DB_CONFIG argument
 
-        logger.info("Initializing WebDriver...")
-        # Use ChromeService for newer Selenium versions
-        service = webdriver.ChromeService(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service)
+        # Initialize WebDriver using the helper function
+        driver = initialize_webdriver()
         driver.maximize_window()
-        driver.set_page_load_timeout(60) # Increased timeout for initial page load
+        driver.set_page_load_timeout(60)
 
         logger.info("Navigating to login page...")
         driver.get(LOGIN_URL)
 
         # --- Manual Login Prompt ---
         print("\n" + "="*50)
-        print(f"Please manually log in to the web dashboard ({LOGIN_URL})")
-        print(f"and navigate to the Meter Details page for the meter: {TABLE_PAGE_URL}")
-        print("Once the table data is visible, press Enter here to continue the scraper.")
+        print(f"Please manually log in to the web dashboard at: {LOGIN_URL}")
+        print("After successful login (and CAPTCHA), the browser should be on the dashboard page.")
+        print("Once you see the main dashboard content, press Enter here in this terminal to continue the scraper.")
         print("="*50 + "\n")
 
         input("Press Enter to continue...")
-        logger.info("User confirmed manual login and navigation. Starting data extraction loop.")
+        logger.info("User confirmed manual login. Script will now verify dashboard and navigate to meter details page.")
 
-        # Ensure we are on the correct page after manual navigation (initial check)
-        # and re-navigate if not.
-        if driver.current_url != TABLE_PAGE_URL:
-            logger.warning(f"Current URL ({driver.current_url}) does not match expected ({TABLE_PAGE_URL}) after manual navigation. Attempting to navigate directly.")
-            driver.get(TABLE_PAGE_URL)
-            # Wait for main table element to be present after direct navigation
-            WebDriverWait(driver, 30).until(
+        # After manual login, the script takes control of navigation
+        # Wait for a general dashboard element to confirm login.
+        try:
+            # THIS IS THE CRITICAL LINE TO ADJUST FOR YOUR WEBSITE.
+            # You NEED to find a unique CSS selector for an element that ONLY appears
+            # when you are successfully logged in and on the main dashboard page.
+            # Example: A div with a specific ID, a unique heading, etc.
+            # Replace "div[class*='main-content']" with your actual selector.
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='dashboard']")) # Adjusted example selector
+            )
+            logger.info("Dashboard element found. Confirmed successful manual login.")
+        except TimeoutException:
+            logger.critical("Timed out waiting for dashboard element after manual login. Ensure login was successful AND you are on the dashboard page. Exiting.")
+            capture_debug_info(driver, "manual_login_dashboard_timeout")
+            return # Exit if dashboard is not confirmed
+
+        # Now, navigate directly to the TABLE_PAGE_URL (meter details page)
+        logger.info(f"Navigating to meter details page: {TABLE_PAGE_URL}")
+        driver.get(TABLE_PAGE_URL)
+        
+        # Wait for the table to be present on the meter details page after direct navigation
+        try:
+            WebDriverWait(driver, 60).until( # Increased wait time here for initial table load
                 EC.presence_of_element_located((By.CSS_SELECTOR, "table.table.customTable"))
             )
-            logger.info("Main table element found after initial direct navigation.")
+            logger.info("Main table element found on meter details page.")
+        except TimeoutException:
+            logger.critical(f"Timed out waiting for the meter data table on {TABLE_PAGE_URL}. Page may not have loaded correctly, session expired, or selector is wrong. Exiting.")
+            capture_debug_info(driver, "meter_table_load_timeout")
+            return # Exit if table not found
 
-        # Initial dropdown selection after landing on the page
-        reselect_instant_partial_dropdowns(driver)
+        reselect_instant_partial_dropdowns(driver) # Initial dropdown selection after landing
 
         while True:
             try:
-                # --- Robust Reloading Logic ---
                 current_url_main = driver.current_url
+                # Check if current URL *contains* TABLE_PAGE_URL (more robust for SPA routes)
                 if TABLE_PAGE_URL not in current_url_main:
-                    logger.warning(f"Current URL '{current_url_main}' does not match expected TABLE_PAGE_URL '{TABLE_PAGE_URL}'. This might indicate session expiration or manual navigation away.")
-                    logger.info("You will need to manually log in again if your session has expired.")
-                    input("\nPress ENTER in THIS terminal once you have manually re-logged in and are on the correct page (or are ready to proceed with a fresh navigation): ")
-                    driver.get(TABLE_PAGE_URL) # Attempt to navigate back
-                    logger.info("Waiting 15 seconds for the meter readings page to load robustly after forced navigation...")
-                    time.sleep(15) # Wait after forced navigation
+                    logger.warning(f"Current URL '{current_url_main}' does not contain expected TABLE_PAGE_URL '{TABLE_PAGE_URL}'. This might indicate session expiration or manual navigation away.")
+                    logger.info("Attempting to re-navigate to the meter details page.")
+                    driver.get(TABLE_PAGE_URL)
+                    logger.info("Waiting 15 seconds for the meter readings page to load robustly after forced re-navigation...")
+                    time.sleep(15)
+                    # Re-verify table presence after re-navigation
+                    WebDriverWait(driver, 30).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "table.table.customTable"))
+                    )
                     reselect_instant_partial_dropdowns(driver)
                 else:
                     logger.info("Refreshing page to get latest data for current cycle...")
-                    driver.refresh() # <-- Explicit Page Refresh for Live Data
+                    driver.refresh()
                     logger.info("Page refreshed. Waiting a few seconds for content to generally appear (15s)...")
-                    time.sleep(15) # Wait after refresh to allow dynamic content to load
-                    reselect_instant_partial_dropdowns(driver) # Re-select dropdowns to activate latest data view
+                    time.sleep(15)
+                    reselect_instant_partial_dropdowns(driver)
                     logger.info("Dropdowns re-selected for current cycle. Proceeding with table scrape.")
-                # --- End Robust Reloading Logic ---
 
-                # Extract raw data from the table
                 raw_extracted_readings = extract_data_from_table(driver)
 
                 processed_readings = []
                 if raw_extracted_readings:
                     logger.info(f"Successfully extracted {len(raw_extracted_readings)} raw readings from the web.")
                     for raw_row in raw_extracted_readings:
-                        processed_row = process_raw_data(raw_row)
+                        # Pass METER_ID and METER_NUMBER from config to process_raw_data as it's designed
+                        processed_row = process_raw_data(raw_row, METER_ID, METER_NUMBER)
                         if processed_row:
                             processed_readings.append(processed_row)
                     logger.info(f"Processed {len(processed_readings)} valid readings for database insertion.")
@@ -455,24 +447,28 @@ def main():
                     logger.warning("No raw readings extracted in this cycle.")
 
                 if processed_readings:
+                    # Insert meter details (upsert) - this ensures meter is in DB before readings
+                    db_manager.insert_meter_details(METER_ID, METER_NUMBER, location="Scraped Data Location")
                     db_manager.insert_meter_readings(processed_readings)
                     logger.info(f"Successfully inserted {len(processed_readings)} readings into the database.")
                 else:
                     logger.warning("No valid readings to insert into the database in this cycle.")
 
             except WebDriverException as e:
-                logger.error(f"WebDriver error during scraping cycle: {e}. Attempting to re-navigate and continue.", exc_info=True)
+                logger.error(f"WebDriver error during scraping cycle: {e}. Attempting recovery by re-navigation.", exc_info=True)
+                capture_debug_info(driver, "webdriver_recovery")
+                # Recovery: Try to go back to meter details page, wait for table, re-select dropdowns
                 try:
-                    logger.info("Attempting recovery by re-navigating and re-selecting dropdowns...")
+                    logger.info("Attempting recovery: Re-navigating to meter details page and re-selecting dropdowns...")
                     driver.get(TABLE_PAGE_URL)
-                    # Wait for recovery page load
                     WebDriverWait(driver, 30).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "table.table.customTable"))
                     )
                     reselect_instant_partial_dropdowns(driver)
+                    logger.info("Recovery attempt successful. Resuming scraping loop.")
                 except WebDriverException as re_e:
-                    logger.critical(f"Failed to re-navigate after WebDriver error: {re_e}. Exiting scraper.", exc_info=True)
-                    break # Exit main loop on unrecoverable WebDriver error
+                    logger.critical(f"Failed critical re-navigation during recovery: {re_e}. Exiting scraper.", exc_info=True)
+                    break
             except Exception as e:
                 logger.exception(f"An unexpected error occurred during scraping cycle: {e}")
 
@@ -490,5 +486,10 @@ def main():
         db_manager.close_db_pool()
         logger.info("Scraper script execution finished.")
 
+# This __main__ block is intentionally minimal as main.py will call scraper.main()
 if __name__ == '__main__':
+    # For standalone testing of scraper.py, a basic logging setup is needed.
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     main()
