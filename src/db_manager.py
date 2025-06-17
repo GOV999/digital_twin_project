@@ -8,6 +8,7 @@ from psycopg2 import sql
 import pytz
 import uuid
 from typing import List, Dict, Any, Optional
+from decimal import Decimal # Import Decimal for conversion
 
 # --- Logging Setup for db_manager ---
 # This ensures logs specific to db_manager are handled
@@ -26,7 +27,7 @@ if not logger.handlers:
     ch.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
+    ch.setFormatter(formatter) # Corrected this line in the previous response
     logger.addHandler(fh)
     logger.addHandler(ch)
     logger.info("db_manager logging handlers added.")
@@ -292,8 +293,16 @@ def insert_meter_readings(readings_data: List[Dict[str, Any]]):
             records_to_insert = []
             for reading in readings_data:
                 # Ensure timestamp is timezone-aware and converted to UTC for storage
-                # This handles cases where timestamps might come without timezone info
-                timestamp_utc = reading['timestamp'].astimezone(timezone.utc) if isinstance(reading['timestamp'], datetime) else reading['timestamp']
+                # If timestamp is naive (no tzinfo), assume it's in APP_TIMEZONE then convert to UTC
+                timestamp_obj = reading['timestamp']
+                if isinstance(timestamp_obj, datetime):
+                    if timestamp_obj.tzinfo is None:
+                        timestamp_utc = APP_TIMEZONE.localize(timestamp_obj).astimezone(timezone.utc)
+                    else:
+                        timestamp_utc = timestamp_obj.astimezone(timezone.utc)
+                else:
+                    timestamp_utc = timestamp_obj # If not datetime, pass as is (e.g., already string)
+
                 records_to_insert.append(
                     (
                         reading.get('meter_id'),
@@ -340,8 +349,9 @@ def insert_forecast_run(run_id: str, meter_id: str, model_name: str,
             # Ensure timestamps are UTC for database storage consistency
             prediction_start_time_utc = prediction_start_time.astimezone(timezone.utc)
             prediction_end_time_utc = prediction_end_time.astimezone(timezone.utc)
-            training_data_start_utc = training_data_start.astimezone(timezone.utc) if training_data_start else None
-            training_data_end_utc = training_data_end.astimezone(timezone.utc) if training_data_end else None
+            training_data_start_utc = training_data_start.astimezone(timezone.utc) if training_data_start and training_data_start.tzinfo else APP_TIMEZONE.localize(training_data_start).astimezone(timezone.utc) if training_data_start else None
+            training_data_end_utc = training_data_end.astimezone(timezone.utc) if training_data_end and training_data_end.tzinfo else APP_TIMEZONE.localize(training_data_end).astimezone(timezone.utc) if training_data_end else None
+
 
             cur.execute(
                 """
@@ -425,7 +435,15 @@ def insert_forecast_predictions(run_id: str, predictions_data: List[Dict[str, An
             records_to_insert = []
             for p in predictions_data:
                 # Ensure timestamp is timezone-aware and converted to UTC for storage
-                timestamp_utc = p['timestamp'].astimezone(timezone.utc) if isinstance(p['timestamp'], datetime) else p['timestamp']
+                timestamp_obj = p['timestamp']
+                if isinstance(timestamp_obj, datetime):
+                    if timestamp_obj.tzinfo is None:
+                        timestamp_utc = APP_TIMEZONE.localize(timestamp_obj).astimezone(timezone.utc)
+                    else:
+                        timestamp_utc = timestamp_obj.astimezone(timezone.utc)
+                else:
+                    timestamp_utc = timestamp_obj # If not datetime, pass as is (e.g., already string)
+
                 records_to_insert.append(
                     (run_id, timestamp_utc, p['predicted_kwh'], p.get('actual_kwh'))
                 )
@@ -458,11 +476,11 @@ def get_latest_meter_readings_by_limit(meter_id: str, limit_count: int = 20) -> 
             cur.execute(
                 """
                 SELECT
-                    meter_id, timestamp,
+                    reading_id, meter_id, timestamp,
                     voltage_vrn, voltage_vyn, voltage_vbn,
                     current_ir, current_iy, current_ib,
                     energy_kwh_import, energy_kvah_import, energy_kwh_export, energy_kvah_export,
-                    network_info
+                    network_info, ingestion_time
                 FROM readings
                 WHERE meter_id = %s
                 ORDER BY timestamp DESC
@@ -471,8 +489,27 @@ def get_latest_meter_readings_by_limit(meter_id: str, limit_count: int = 20) -> 
                 (meter_id, limit_count)
             )
             readings = cur.fetchall()
-            # Convert timestamps back to APP_TIMEZONE for consistency with application logic
-            return [{**dict(row), 'timestamp': row['timestamp'].astimezone(APP_TIMEZONE)} for row in readings]
+            
+            # Process results: convert DictRow to dict, handle timezone and Decimal
+            processed_readings = []
+            for row in readings:
+                row_dict = dict(row) # Convert DictRow to standard dict
+
+                # Convert timestamp to APP_TIMEZONE
+                if 'timestamp' in row_dict and isinstance(row_dict['timestamp'], datetime):
+                    row_dict['timestamp'] = row_dict['timestamp'].astimezone(APP_TIMEZONE)
+                if 'ingestion_time' in row_dict and isinstance(row_dict['ingestion_time'], datetime):
+                    row_dict['ingestion_time'] = row_dict['ingestion_time'].astimezone(APP_TIMEZONE)
+
+                # Convert Decimal fields to float for JSON serialization
+                for key, value in row_dict.items():
+                    if isinstance(value, Decimal):
+                        row_dict[key] = float(value)
+                
+                processed_readings.append(row_dict)
+
+            logger.debug(f"Retrieved {len(processed_readings)} latest readings for meter {meter_id}.")
+            return processed_readings
     except Exception as e:
         logger.error(f"Error fetching latest readings for meter {meter_id}: {e}", exc_info=True)
         return []
@@ -506,8 +543,21 @@ def get_meter_readings_in_range(meter_id: str, start_time: datetime, end_time: d
                 (meter_id, start_time_utc, end_time_utc)
             )
             readings = cur.fetchall()
-            # Convert timestamps back to APP_TIMEZONE for consistency with application logic
-            return [{**dict(row), 'timestamp': row['timestamp'].astimezone(APP_TIMEZONE)} for row in readings]
+            
+            processed_readings = []
+            for row in readings:
+                row_dict = dict(row)
+                if 'timestamp' in row_dict and isinstance(row_dict['timestamp'], datetime):
+                    row_dict['timestamp'] = row_dict['timestamp'].astimezone(APP_TIMEZONE)
+                
+                # Convert Decimal fields to float
+                for key, value in row_dict.items():
+                    if isinstance(value, Decimal):
+                        row_dict[key] = float(value)
+                
+                processed_readings.append(row_dict)
+
+            return processed_readings
     except Exception as e:
         logger.error(f"Error fetching historical readings for meter {meter_id} in range {start_time}-{end_time}: {e}", exc_info=True)
         return []
@@ -538,18 +588,19 @@ def get_latest_forecast_run(meter_id: str) -> Optional[Dict[str, Any]]:
             )
             latest_run = cur.fetchone()
             if latest_run:
-                # Convert all relevant timestamps to APP_TIMEZONE
+                # Convert DictRow to dict
                 result_dict = dict(latest_run)
-                if result_dict.get('prediction_start_time'):
-                    result_dict['prediction_start_time'] = result_dict['prediction_start_time'].astimezone(APP_TIMEZONE)
-                if result_dict.get('prediction_end_time'):
-                    result_dict['prediction_end_time'] = result_dict['prediction_end_time'].astimezone(APP_TIMEZONE)
-                if result_dict.get('training_data_start'):
-                    result_dict['training_data_start'] = result_dict['training_data_start'].astimezone(APP_TIMEZONE)
-                if result_dict.get('training_data_end'):
-                    result_dict['training_data_end'] = result_dict['training_data_end'].astimezone(APP_TIMEZONE)
-                if result_dict.get('run_timestamp'):
-                    result_dict['run_timestamp'] = result_dict['run_timestamp'].astimezone(APP_TIMEZONE)
+                
+                # Convert all relevant timestamps to APP_TIMEZONE
+                for key in ['prediction_start_time', 'prediction_end_time', 'training_data_start', 'training_data_end', 'run_timestamp']:
+                    if key in result_dict and isinstance(result_dict[key], datetime):
+                        result_dict[key] = result_dict[key].astimezone(APP_TIMEZONE)
+                
+                # Convert Decimal fields to float
+                for key in ['mae', 'rmse']:
+                    if key in result_dict and isinstance(result_dict[key], Decimal):
+                        result_dict[key] = float(result_dict[key])
+
                 return result_dict
             return None
     except Exception as e:
@@ -579,8 +630,21 @@ def get_forecast_predictions(run_id: str) -> List[Dict[str, Any]]:
                 (run_id,)
             )
             predictions = cur.fetchall()
-            # Convert timestamps back to APP_TIMEZONE
-            return [{**dict(row), 'timestamp': row['timestamp'].astimezone(APP_TIMEZONE)} for row in predictions]
+            
+            processed_predictions = []
+            for row in predictions:
+                row_dict = dict(row)
+                if 'timestamp' in row_dict and isinstance(row_dict['timestamp'], datetime):
+                    row_dict['timestamp'] = row_dict['timestamp'].astimezone(APP_TIMEZONE)
+                
+                # Convert Decimal fields to float
+                for key in ['predicted_kwh', 'actual_kwh']:
+                    if key in row_dict and isinstance(row_dict[key], Decimal):
+                        row_dict[key] = float(row_dict[key])
+                
+                processed_predictions.append(row_dict)
+
+            return processed_predictions
     except Exception as e:
         logger.error(f"Error fetching forecast predictions for run {run_id}: {e}", exc_info=True)
         return []
@@ -602,6 +666,7 @@ def get_all_meter_details() -> List[Dict[str, Any]]:
                 """
             )
             meters = cur.fetchall()
+            # No Decimal or complex datetime conversions typically needed here, but keeping it consistent
             return [dict(row) for row in meters]
     except Exception as e:
         logger.error(f"Error fetching all meter details: {e}", exc_info=True)
@@ -638,11 +703,14 @@ if __name__ == '__main__':
         # Test insert_meter_readings
         logger.info(f"\n--- Testing insert_meter_readings for {test_meter_id} ---")
         now_utc = datetime.now(timezone.utc)
+        # Create a naive datetime in APP_TIMEZONE for testing the conversion logic
+        now_app_tz = now_utc.astimezone(APP_TIMEZONE)
+        
         test_readings = [
-            {'meter_id': test_meter_id, 'timestamp': now_utc - timedelta(minutes=45), 'energy_kwh_import': 10.5, 'voltage_vrn': 230.1, 'current_ir': 0.1},
-            {'meter_id': test_meter_id, 'timestamp': now_utc - timedelta(minutes=30), 'energy_kwh_import': 11.2, 'voltage_vrn': 230.5, 'current_ir': 0.11},
-            {'meter_id': test_meter_id, 'timestamp': now_utc - timedelta(minutes=15), 'energy_kwh_import': 10.8, 'voltage_vrn': 229.8, 'current_ir': 0.12},
-            {'meter_id': test_meter_id, 'timestamp': now_utc, 'energy_kwh_import': 11.5, 'voltage_vrn': 231.0, 'current_ir': 0.13},
+            {'meter_id': test_meter_id, 'timestamp': (now_app_tz - timedelta(minutes=45)).replace(tzinfo=None), 'energy_kwh_import': Decimal('10.5'), 'voltage_vrn': Decimal('230.1'), 'current_ir': Decimal('0.1')},
+            {'meter_id': test_meter_id, 'timestamp': (now_app_tz - timedelta(minutes=30)).replace(tzinfo=None), 'energy_kwh_import': Decimal('11.2'), 'voltage_vrn': Decimal('230.5'), 'current_ir': Decimal('0.11')},
+            {'meter_id': test_meter_id, 'timestamp': (now_app_tz - timedelta(minutes=15)).replace(tzinfo=None), 'energy_kwh_import': Decimal('10.8'), 'voltage_vrn': Decimal('229.8'), 'current_ir': Decimal('0.12')},
+            {'meter_id': test_meter_id, 'timestamp': now_app_tz.replace(tzinfo=None), 'energy_kwh_import': Decimal('11.5'), 'voltage_vrn': Decimal('231.0'), 'current_ir': Decimal('0.13')},
         ]
         insert_meter_readings(test_readings)
 
@@ -650,36 +718,37 @@ if __name__ == '__main__':
         logger.info(f"\n--- Testing get_latest_meter_readings_by_limit for {test_meter_id} ---")
         latest = get_latest_meter_readings_by_limit(test_meter_id, limit_count=2)
         for r in latest:
-            logger.info(f"  Latest Reading: {r['timestamp']} - {r['energy_kwh_import']} kWh")
+            # All fields should now be present and Decimals converted to float
+            logger.info(f"  Latest Reading: {r['timestamp']} - {r['energy_kwh_import']} kWh (Voltage: {r['voltage_vrn']}) - Type of energy_kwh_import: {type(r['energy_kwh_import'])}")
 
         # Test get_meter_readings_in_range
         logger.info(f"\n--- Testing get_meter_readings_in_range for {test_meter_id} ---")
-        historical_start = now_utc - timedelta(hours=1)
-        historical_end = now_utc + timedelta(minutes=1) # Small buffer to include last reading
-        # Ensure conversion to APP_TIMEZONE for the range query arguments
-        historical = get_meter_readings_in_range(test_meter_id, historical_start.astimezone(APP_TIMEZONE), historical_end.astimezone(APP_TIMEZONE))
+        historical_start = (now_app_tz - timedelta(hours=1))
+        historical_end = now_app_tz + timedelta(minutes=1) # Small buffer to include last reading
+        
+        historical = get_meter_readings_in_range(test_meter_id, historical_start, historical_end)
         for r in historical:
-            logger.info(f"  Historical Reading: {r['timestamp']} - {r['energy_kwh_import']} kWh")
+            logger.info(f"  Historical Reading: {r['timestamp']} - {r['energy_kwh_import']} kWh (Voltage: {r['voltage_vrn']}) - Type of energy_kwh_import: {type(r['energy_kwh_import'])}")
 
         # Test forecast run and predictions
         logger.info(f"\n--- Testing forecast run and predictions for {test_meter_id} ---")
-        pred_start = now_utc + timedelta(minutes=15)
-        pred_end = now_utc + timedelta(hours=1, minutes=15)
+        pred_start = now_app_tz + timedelta(minutes=15)
+        pred_end = now_app_tz + timedelta(hours=1, minutes=15)
 
         # Note: MAE/RMSE are mock values for this test as there's no actual model run
         test_run_id = str(uuid.uuid4()) # Generate UUID here, pass as string
         insert_forecast_run(
             run_id=test_run_id, # Pass the generated run_id
             meter_id=test_meter_id, model_name="test_model",
-            prediction_start_time=pred_start.astimezone(APP_TIMEZONE), # Ensure timezone aware
-            prediction_end_time=pred_end.astimezone(APP_TIMEZONE),     # Ensure timezone aware
-            training_data_start=now_utc - timedelta(hours=2), training_data_end=now_utc,
+            prediction_start_time=pred_start, # Already in APP_TIMEZONE, will be converted to UTC in function
+            prediction_end_time=pred_end,     # Already in APP_TIMEZONE, will be converted to UTC in function
+            training_data_start=now_app_tz - timedelta(hours=2), training_data_end=now_app_tz,
             mae=0.5, rmse=0.7 # Mock MAE/RMSE for initial insert
         )
 
         test_predictions = [
-            {'timestamp': pred_start, 'predicted_kwh': 12.0, 'actual_kwh': None},
-            {'timestamp': pred_start + timedelta(minutes=15), 'predicted_kwh': 12.1, 'actual_kwh': None}
+            {'timestamp': pred_start, 'predicted_kwh': Decimal('12.0'), 'actual_kwh': None},
+            {'timestamp': pred_start + timedelta(minutes=15), 'predicted_kwh': Decimal('12.1'), 'actual_kwh': None}
         ]
         insert_forecast_predictions(test_run_id, test_predictions)
         update_forecast_run_metrics(test_run_id, 0.6, 0.8) # Update with some mock metrics
@@ -689,9 +758,11 @@ if __name__ == '__main__':
         if latest_run:
             logger.info(f"\n--- Latest Forecast Run: {latest_run['run_id']} ---")
             logger.info(f"  Model: {latest_run['model_name']}, MAE: {latest_run['mae']}, RMSE: {latest_run['rmse']}")
+            logger.info(f"  Type of MAE: {type(latest_run['mae'])}, Type of RMSE: {type(latest_run['rmse'])}")
             predictions_for_run = get_forecast_predictions(latest_run['run_id'])
             for p in predictions_for_run:
                 logger.info(f"  Prediction: {p['timestamp']} - {p['predicted_kwh']} kWh (Actual: {p['actual_kwh']})")
+                logger.info(f"  Type of predicted_kwh: {type(p['predicted_kwh'])}")
 
         # Test get_all_meter_details
         logger.info(f"\n--- Testing get_all_meter_details ---")

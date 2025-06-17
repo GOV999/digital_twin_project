@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Twin Demand Forecasting</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Custom scrollbar for better aesthetics - optional */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #2d3748; /* Corresponds to dark theme */
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #718096; /* Corresponds to dark theme */
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #a0aec0; /* Lighter on hover */
+    }
+  </style>
+  <!-- If not using Vite/bundler that handles JSX/TS directly, and if React/Recharts are not globally available -->
+  <!-- You might need to include React, ReactDOM and Recharts via script tags if not bundled. -->
+  <!-- For a Vite/esbuild setup, the index.tsx import will handle this. -->
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "recharts": "https://esm.sh/recharts@^2.15.3"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/index.tsx"></script>
+</body>
+</html>
