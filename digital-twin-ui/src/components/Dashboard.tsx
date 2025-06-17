@@ -13,6 +13,7 @@ import DemandChart from './DemandChart';
 import ReadingsTable from './ReadingsTable';
 import Spinner from './Spinner';
 import ErrorMessage from './ErrorMessage';
+import ScraperControl from './ScraperControl'; // Import the new component
 
 interface DashboardProps {
   selectedMeterId: string;
@@ -39,7 +40,7 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   const loadDashboardData = useCallback(async () => {
     if (!selectedMeterId) return;
 
-    console.log(`[Dashboard] loadDashboardData triggered for meter: ${selectedMeterId}. Refresh key: ${refreshTrigger}`);
+    // console.log(`[Dashboard] loadDashboardData triggered for meter: ${selectedMeterId}. Refresh key: ${refreshTrigger}`);
     setLoading(true);
     setError(null);
     try {
@@ -50,8 +51,8 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
         fetchLatestReadings(selectedMeterId, LATEST_READINGS_LIMIT),
       ]);
       
-      console.log("[Dashboard] Fetched HistData Points:", histData ? histData.length : 0);
-      console.log("[Dashboard] Fetched FcData Points:", fcData ? fcData.length : 0, "| First 2 FcPoints:", fcData ? fcData.slice(0,2) : "N/A");
+      // console.log("[Dashboard] Fetched HistData Points:", histData ? histData.length : 0);
+      // console.log("[Dashboard] Fetched FcData Points:", fcData ? fcData.length : 0, "| First 2 FcPoints:", fcData ? fcData.slice(0,2) : "N/A");
 
       setHistoricalData(histData);
       setForecastData(fcData);
@@ -77,7 +78,7 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   }, [loadDashboardData]); 
 
   useEffect(() => {
-    console.log("[ChartEffect] START. SelectedHours:", selectedPredictionHours, "Hist Data available:", !!historicalData, "Forecast Data available:", !!forecastData);
+    // console.log("[ChartEffect] START. SelectedHours:", selectedPredictionHours, "Hist Data available:", !!historicalData, "Forecast Data available:", !!forecastData);
 
     const chartDataMap = new Map<number, CustomTypes.ChartDataPoint>();
     const now = new Date();
@@ -121,16 +122,15 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
       const ts = new Date(point.timestamp).getTime();
       return ts > predictionAnchorTime && ts <= predictionEndTime;
     });
-    console.log("[ChartEffect] Filtered Displayable Forecast Data Points:", displayableForecastData.length, "| First 2 Displayable FcPoints:", displayableForecastData.slice(0,2));
+    // console.log("[ChartEffect] Filtered Displayable Forecast Data Points:", displayableForecastData.length, "| First 2 Displayable FcPoints:", displayableForecastData.slice(0,2));
 
     displayableForecastData.forEach((point, index) => { 
       const ts = new Date(point.timestamp).getTime();
-      // ***** CORRECTED TO USE point.predicted_kwh *****
       const predictedValue = (typeof point.predicted_kwh === 'number') ? point.predicted_kwh : undefined; 
       
-      if (index < 5 || index >= displayableForecastData.length - 5) { 
-        console.log(`[ChartEffect] Processing Forecast Point ${index}: Timestamp: ${new Date(ts).toLocaleString()}, Original point.predicted_kwh: ${point.predicted_kwh}, Type: ${typeof point.predicted_kwh}, Parsed predictedValue: ${predictedValue}`);
-      }
+      // if (index < 2) { // Log fewer points
+      //   console.log(`[ChartEffect] Processing Forecast Point ${index}: Timestamp: ${new Date(ts).toLocaleString()}, Original point.predicted_kwh: ${point.predicted_kwh}, Type: ${typeof point.predicted_kwh}, Parsed predictedValue: ${predictedValue}`);
+      // }
       
       let entry = chartDataMap.get(ts);
       if (!entry) {
@@ -150,9 +150,9 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
     const finalChartData = Array.from(chartDataMap.values());
     finalChartData.sort((a, b) => a.timestamp - b.timestamp);
     
-    console.log("[ChartEffect] Final Processed Chart Data Points:", finalChartData.length, "| First 5 chart entries:", finalChartData.slice(0, 5));
-    const predictionsInChart = finalChartData.filter(d => d.predicted !== undefined);
-    console.log("[ChartEffect] Final Chart Data with Predictions (count and first 5):", predictionsInChart.length, predictionsInChart.slice(0,5));
+    // console.log("[ChartEffect] Final Processed Chart Data Points:", finalChartData.length, "| First 5 chart entries:", finalChartData.slice(0, 5));
+    // const predictionsInChart = finalChartData.filter(d => d.predicted !== undefined);
+    // console.log("[ChartEffect] Final Chart Data with Predictions (count and first 5):", predictionsInChart.length, predictionsInChart.slice(0,5));
     
     setChartData(finalChartData);
 
@@ -166,7 +166,7 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
     setIsSimulating(true);
     setSimulationError(null);
     try {
-      console.log(`[Dashboard] Triggering simulation for meter ${selectedMeterId} with duration ${selectedPredictionHours} hours.`);
+      // console.log(`[Dashboard] Triggering simulation for meter ${selectedMeterId} with duration ${selectedPredictionHours} hours.`);
       await triggerSimulation(selectedMeterId, selectedPredictionHours);
       if (onSimulationComplete) { 
           onSimulationComplete(); 
@@ -240,6 +240,9 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
 
   return (
     <div className="space-y-6 sm:space-y-8">
+      {/* Scraper Control Section */}
+      <ScraperControl />
+
       <div className="dashboard-controls">
         {metrics ? <MetricsCard metrics={metrics} /> : 
           (!loading && <div className="card no-data-placeholder" style={{padding: '1rem'}}><p className="no-data-text">No performance metrics available for the latest forecast.</p></div>)

@@ -25,11 +25,10 @@ export interface MeterReading {
 
 export interface ForecastPoint {
   timestamp: string; 
-  predicted_kwh: number;      // Corrected from predicted_value
-  actual_kwh: number | null;  // Changed actual_value to actual_kwh to match backend
-  prediction_id?: number;     // From backend schema
-  run_id?: string;            // From backend schema
-  // meter_id is usually part of the run, not each point, but can be kept if backend sends it
+  predicted_kwh: number; 
+  actual_kwh: number | null; 
+  prediction_id?: number; 
+  run_id?: string;  
 }
 
 export interface ForecastMetrics {
@@ -38,13 +37,11 @@ export interface ForecastMetrics {
   model_name: string;
   prediction_start_time?: string; 
   prediction_end_time?: string; 
-  training_data_start?: string; // Added to match db_manager potential
-  training_data_end?: string;   // Added to match db_manager potential
+  training_data_start?: string; 
+  training_data_end?: string;   
   mae: number | null;
   rmse: number | null;
-  run_timestamp?: string;       // Added to match db_manager
-  // forecast_generation_time seems to be run_timestamp
-  // training_data_hours is not directly in forecast_runs, calculated if needed
+  run_timestamp?: string;       
 }
 
 export interface ChartDataPoint {
@@ -58,4 +55,17 @@ export interface ApiError {
   message: string;
   status?: number;
   details?: any;
+}
+
+// New types for Scraper Control
+export type ScraperRunStatus = 'running' | 'stopped' | 'not_started' | 'error' | 'error_stopping';
+
+export interface ScraperStatusResponse {
+  status: ScraperRunStatus;
+  message?: string; // Optional message from backend
+}
+
+export interface ScraperLogResponse {
+  logs: string[]; 
+  error?: string;
 }
