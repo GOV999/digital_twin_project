@@ -1,13 +1,26 @@
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React</title>
-  </head>
-  <body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Twin Demand Forecasting</title>
+    <!-- Tailwind CSS from CDN (for development) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Basic body styling to ensure full height for gradient backgrounds */
+      html, body, #root {
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background-color: #f7fafc; /* A default light gray, will be overridden by App.tsx gradient */
+      }
+    </style>
+</head>
+<body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+    <script type="module" src="/src/index.tsx"></script>
+</body>
 </html>
