@@ -425,3 +425,78 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr)); /* lg:grid-cols-3 */
   }
 }
+
+/* Add these new styles to your existing styles.css */
+
+/* Simulation Controls */
+.simulation-controls.card { /* Applied .card for consistent styling */
+  padding: 1rem; /* Adjust padding as needed */
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem; /* space-y-3 equivalent */
+  align-items: flex-start; /* Align items to the start for better layout */
+}
+
+.run-simulation-button {
+  padding: 0.6rem 1rem;
+  background-color: #16a34a; /* bg-green-600 */
+  color: white;
+  border-radius: 0.5rem; /* rounded-lg */
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); /* shadow-md */
+  transition: background-color 0.2s, opacity 0.2s;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 500; /* font-medium */
+  width: 100%; /* Make button full width of its container */
+}
+
+.run-simulation-button:hover {
+  background-color: #15803d; /* hover:bg-green-700 */
+}
+
+.run-simulation-button:disabled {
+  background-color: #4ade80; /* bg-green-400 for disabled */
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.run-simulation-button .spinner-sm {
+  margin-right: 0.5rem;
+  border-top-color: white; /* Ensure spinner is visible on button */
+  border-bottom-color: white;
+}
+
+/* Ensure error messages related to simulation also look fine */
+.dashboard-controls + .error-message-container, /* Error below controls */
+.simulation-controls + .error-message-container { /* Error within simulation controls */
+  margin-top: 1rem;
+}
+
+/* Adjustments for dashboard controls layout with simulation button */
+@media (min-width: 640px) { /* sm: breakpoint */
+  .dashboard-controls {
+    /* Existing: grid-template-columns: repeat(2, minmax(0, 1fr)); */
+    /* If you want metrics and simulation controls side-by-side */
+  }
+  .simulation-controls.card {
+     width: auto; /* Allow it to size based on content or grid column */
+  }
+  .run-simulation-button {
+    width: auto; /* Button doesn't have to be full width on larger screens */
+  }
+}
+
+@media (min-width: 1024px) { /* lg: breakpoint */
+  .dashboard-controls {
+    /* Existing: grid-template-columns: 1fr auto; */
+    /* This might need adjustment if metrics + sim controls should stack or rearrange */
+    /* Example: if they stack, revert to 1fr or adjust grid areas */
+  }
+  .simulation-controls.card {
+     /* max-width: 300px; /* from previous prediction duration selector */
+     /* This max-width might be too restrictive now with a button. Adjust as needed. */
+  }
+}

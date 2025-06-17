@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import * as CustomTypes from './types'; // Changed to namespace import
+import * as CustomTypes from './types';
 import { fetchMeters } from './services/apiService';
 import MeterSelector from './components/MeterSelector';
 import Dashboard from './components/Dashboard';
 import { RefreshIcon } from './components/icons/RefreshIcon';
-import Spinner from './components/Spinner'; 
+import Spinner from './components/Spinner';
 import ErrorMessage from './components/ErrorMessage';
 
-const AUTO_REFRESH_INTERVAL_MS = 60000; // 60 seconds
+const AUTO_REFRESH_INTERVAL_MS = 300000; // 5 minutes
 
 const App: React.FC = () => {
   const [meters, setMeters] = useState<CustomTypes.Meter[]>([]);
@@ -15,6 +15,10 @@ const App: React.FC = () => {
   const [loadingMeters, setLoadingMeters] = useState<boolean>(true);
   const [errorMeters, setErrorMeters] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState<number>(0);
+
+  const handleRefreshAll = useCallback(() => {
+    setRefreshKey(prev => prev + 1);
+  }, []);
 
   const loadMeters = useCallback(async (isInitialLoad = false) => {
     setLoadingMeters(true);
@@ -35,30 +39,29 @@ const App: React.FC = () => {
     } finally {
       setLoadingMeters(false);
     }
-  }, [selectedMeterId]);
+  }, [selectedMeterId]); // selectedMeterId is a dependency here
 
   // Initial load and manual refresh
   useEffect(() => {
     loadMeters(true); // Pass true for initial load logic
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]); // Removed loadMeters from dependencies to avoid loop with setSelectedMeterId
+  }, [refreshKey, loadMeters]); // loadMeters is now a dependency
 
-  // Auto-refresh mechanism
+  // Auto-refresh mechanism for dashboard data (not meter list, that's manual/initial)
   useEffect(() => {
     const intervalId = setInterval(() => {
-      setRefreshKey(prev => prev + 1);
+      // This will trigger re-fetch in Dashboard via refreshTrigger prop
+      // Only refresh if a meter is selected to avoid unnecessary calls
+      if (selectedMeterId) {
+        handleRefreshAll();
+      }
     }, AUTO_REFRESH_INTERVAL_MS);
 
-    return () => clearInterval(intervalId); // Cleanup interval on component unmount
-  }, []);
+    return () => clearInterval(intervalId);
+  }, [selectedMeterId, handleRefreshAll]);
 
 
   const handleMeterSelect = (meterId: string) => {
     setSelectedMeterId(meterId);
-  };
-
-  const handleRefreshAll = () => {
-    setRefreshKey(prev => prev + 1); 
   };
 
   return (
@@ -83,7 +86,7 @@ const App: React.FC = () => {
             )}
             <button
               onClick={handleRefreshAll}
-              disabled={loadingMeters}
+              disabled={loadingMeters} // Can also disable if dashboard is loading its own data
               className="button"
               title="Refresh all data"
             >
@@ -95,7 +98,7 @@ const App: React.FC = () => {
 
       <main className="main-content">
         {loadingMeters && !errorMeters && (
-          <div className="spinner-container" style={{height: '16rem'}}> {/* h-64 */}
+          <div className="spinner-container" style={{height: '16rem'}}>
             <Spinner />
             <p className="spinner-text">Loading meter list...</p>
           </div>
@@ -124,11 +127,15 @@ const App: React.FC = () => {
           </div>
         )}
         {selectedMeterId && (
-          <Dashboard selectedMeterId={selectedMeterId} refreshTrigger={refreshKey} />
+          <Dashboard
+            selectedMeterId={selectedMeterId}
+            refreshTrigger={refreshKey}
+            onSimulationComplete={handleRefreshAll} // Pass the refresh function
+          />
         )}
       </main>
       <footer className="app-footer">
-        Digital Twin Project &copy; {new Date().getFullYear()}
+        Digital Twin Project © {new Date().getFullYear()}
       </footer>
     </div>
   );

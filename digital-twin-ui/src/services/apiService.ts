@@ -1,6 +1,5 @@
-
 import { API_BASE_URL } from '../constants';
-import * as CustomTypes from '../types'; // Changed to namespace import
+import * as CustomTypes from '../types';
 
 async function handleResponse<T,>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -8,7 +7,6 @@ async function handleResponse<T,>(response: Response): Promise<T> {
     try {
       errorData = await response.json();
     } catch (e) {
-      // If response is not JSON, use status text
       errorData = { message: response.statusText };
     }
     const error = new Error(errorData.message || `API request failed with status ${response.status}`) as any;
@@ -36,23 +34,33 @@ export const fetchHistoricalData = async (meterId: string, hours: number): Promi
 
 export const fetchLatestForecast = async (meterId: string): Promise<CustomTypes.ForecastPoint[]> => {
   const response = await fetch(`${API_BASE_URL}/meters/${meterId}/latest_forecast`);
-  const data = await handleResponse<CustomTypes.ForecastPoint[] | { forecast?: CustomTypes.ForecastPoint[] }>(response); // Backend might wrap it
+  const data = await handleResponse<CustomTypes.ForecastPoint[] | { forecast?: CustomTypes.ForecastPoint[] }>(response);
   if (Array.isArray(data)) {
     return data;
   }
-  if (data && Array.isArray(data.forecast)) { // Handle potential wrapping from backend { "forecast": [...] }
+  if (data && Array.isArray(data.forecast)) {
      return data.forecast;
   }
-  return []; // Return empty if structure is unexpected or no forecast
+  return [];
 };
 
 export const fetchLatestForecastDetails = async (meterId: string): Promise<CustomTypes.ForecastMetrics | null> => {
   const response = await fetch(`${API_BASE_URL}/meters/${meterId}/latest_forecast_details`);
-   // Handle cases where details might be null or an empty object from backend if no forecast exists
-  if (response.status === 404) { // Or if backend returns empty for no details
+  if (response.status === 404) {
     return null;
   }
   const data = await handleResponse<CustomTypes.ForecastMetrics | {} >(response);
-  if (Object.keys(data).length === 0) return null; // Empty object means no details
+  if (Object.keys(data).length === 0) return null;
   return data as CustomTypes.ForecastMetrics;
+};
+
+export const triggerSimulation = async (meterId: string, durationHours: number): Promise<{ message: string; run_id?: string; metrics?: any }> => {
+  const response = await fetch(`${API_BASE_URL}/meters/${meterId}/simulate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ duration_hours: durationHours }),
+  });
+  return handleResponse<{ message: string; run_id?: string; metrics?: any }>(response);
 };
