@@ -1,0 +1,5 @@
+{
+  "name": "Digital Twin Demand Forecasting UI",
+  "description": "A React-based web application to visualize energy demand simulations and forecasting model performance for a smart grid digital twin.",
+  "requestFramePermissions": []
+}

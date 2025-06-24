@@ -1,0 +1,5 @@
+[Scraper]
+LOGIN_URL = http://your_login_url.com
+DASHBOARD_URL = http://your_dashboard_url.com
+TABLE_PAGE_URL = http://your_table_page_url.com
+RELOAD_INTERVAL_SECONDS = 60 # Example: 1 minute

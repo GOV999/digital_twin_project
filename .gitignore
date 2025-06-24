@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.Python/
+build/       
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.installed_packages
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/ # Generic .env, consider .env.example for committed structure
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+.tox/
+htmlcov/
+.mypy_cache/
+
+# Databases & Data (from your old .gitignore)
+# If these contain generated data or are too large, ignoring is fine.
+# Otherwise, consider if they should be versioned or managed differently.
+*.db
+data/
+db/
+
+# Logs & Debug Dumps (from your old .gitignore & project structure)
+logs/
+debug_dumps/
+
+# Configuration (from your old .gitignore)
+# Typically, a template (e.g., config.ini.template) is committed,
+# and the actual config.ini (with secrets/local settings) is ignored.
+config.ini
+
+# Frontend (Vite, React - assuming at the project root)
+node_modules/
+dist/          
+.vite/         
+coverage/    
+
+# Frontend Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# pnpm-debug.log* # If using pnpm
+
+# Frontend Environment variables
+.env.local
+.env.*.local
+# Consider ignoring .env if it's not already covered by .env.*.local
+# and you commit a .env.example file.
+
+# IDE & Editor specific
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary/Backup files
+*.bak
+*~
+*.swp
