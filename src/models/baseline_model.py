@@ -1,119 +1,122 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
 
 # Import the abstract base class from forecasting_engine
-# Use absolute import here for clarity as this module is part of the 'src' package
 from src.forecasting_engine import BaseForecastingModel
 
-# --- Logging Setup ---
-# Get the logger for this module. Handlers will be configured by main.py
 logger = logging.getLogger(__name__)
-# Set level for this logger; main.py's root logger configuration will usually override/filter this.
-#logger.setLevel(logging.INFO)
 
-
-class BaselineModelModel(BaseForecastingModel): # This class name is crucial for the loader
+class BaselineModelModel(BaseForecastingModel):
     """
-    A simple baseline forecasting model.
-    Predicts the last known `energy_kwh_import` value for all future timestamps.
+    An improved baseline model using a simple but powerful machine learning model:
+    Random Forest Regressor.
+
+    This model learns patterns from time-based features (e.g., hour of day,
+    day of week) to predict future energy consumption.
     """
     def __init__(self):
-        # Call the base class constructor with the model's name
         super().__init__("baseline_model")
-        self.last_known_kwh = None
-        self.trained_last_timestamp = None
-        logger.info(f"Initialized {self.get_model_name()} ({type(self).__name__}).")
+        # Initialize the machine learning model.
+        # n_estimators=100 means it will build 100 decision trees.
+        # random_state=42 ensures that the model gives the same results every time for the same data.
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        self.is_trained = False
+        logger.info(f"Initialized Machine Learning Baseline (Random Forest).")
+
+    def _create_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Creates time-series features from a datetime index.
+        These features are what the model will learn from.
+        """
+        df['hour'] = df.index.hour
+        df['dayofweek'] = df.index.dayofweek  # Monday=0, Sunday=6
+        df['quarter'] = df.index.quarter
+        df['month'] = df.index.month
+        df['year'] = df.index.year
+        df['dayofyear'] = df.index.dayofyear
+        df['dayofmonth'] = df.index.day
+        df['weekofyear'] = df.index.isocalendar().week.astype(int)
+        return df
 
     def train(self, historical_data: List[Dict[str, Any]]):
         """
-        Trains the baseline model. For this model, training simply means
-        storing the latest historical energy_kwh_import value.
-
+        Trains the Random Forest model on the historical data.
+        
         Args:
-            historical_data (List[Dict[str, Any]]): A list of dictionaries,
-                                                     each representing a meter reading.
-                                                     Expected keys: 'timestamp', 'energy_kwh_import'.
+            historical_data: A list of reading dictionaries.
         """
         if not historical_data:
-            logger.warning(f"No historical data provided for {self.get_model_name()} training.")
-            self.last_known_kwh = None
-            self.trained_last_timestamp = None
+            logger.warning(f"No historical data provided for {self.get_model_name()} training. Model not trained.")
             return
 
-        # Sort data by timestamp to get the truly last known value
-        # Ensure timestamps are comparable (all timezone-aware or all naive)
-        sorted_data = sorted(historical_data, key=lambda x: x['timestamp'], reverse=True)
-        latest_reading = sorted_data[0]
+        try:
+            # 1. Convert data to a pandas DataFrame
+            df = pd.DataFrame(historical_data)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.set_index('timestamp')
 
-        self.last_known_kwh = latest_reading.get('energy_kwh_import')
-        self.trained_last_timestamp = latest_reading.get('timestamp')
-        logger.info(f"{self.get_model_name()} trained. Last known kWh: {self.last_known_kwh} at {self.trained_last_timestamp}")
+            # 2. Ensure we only train on valid data
+            df.dropna(subset=['energy_kwh_import'], inplace=True)
+            if df.empty:
+                logger.warning("Historical data is empty after dropping nulls. Model not trained.")
+                return
 
+            # 3. Feature Engineering: Create features from the timestamp index
+            df = self._create_features(df)
+            
+            # 4. Define our features (X) and target (y)
+            FEATURES = ['hour', 'dayofweek', 'quarter', 'month', 'year', 'dayofyear', 'dayofmonth', 'weekofyear']
+            TARGET = 'energy_kwh_import'
+            
+            X_train = df[FEATURES]
+            y_train = df[TARGET]
+
+            # 5. Train the model
+            logger.info(f"Training Random Forest model with {len(X_train)} data points...")
+            self.model.fit(X_train, y_train)
+            self.is_trained = True
+            logger.info("Model training complete.")
+
+        except Exception as e:
+            logger.error(f"Error during model training: {e}", exc_info=True)
+            self.is_trained = False
 
     def predict(self, start_timestamp: datetime, end_timestamp: datetime,
                 frequency: timedelta = timedelta(minutes=15)) -> List[Dict[str, Any]]:
         """
-        Generates energy consumption predictions.
-        This baseline model predicts the `last_known_kwh` for all future points.
-
-        Args:
-            start_timestamp (datetime): The starting timestamp for predictions.
-            end_timestamp (datetime): The ending timestamp for predictions.
-            frequency (timedelta): The interval between predictions (e.g., 15 minutes).
-
-        Returns:
-            List[Dict[str, Any]]: A list of dictionaries, each with 'timestamp' and 'predicted_kwh'.
+        Generates predictions using the trained Random Forest model.
         """
-        if self.last_known_kwh is None:
-            logger.warning(f"{self.get_model_name()} not trained or no last known kWh value. Returning empty predictions.")
+        if not self.is_trained:
+            logger.warning(f"{self.get_model_name()} has not been trained. Returning empty predictions.")
             return []
 
-        predictions = []
-        current_time = start_timestamp
-        while current_time < end_timestamp:
-            predictions.append({
-                'timestamp': current_time,
-                'predicted_kwh': float(self.last_known_kwh) # Ensure prediction is a float
-            })
-            current_time += frequency
+        # 1. Create a DataFrame for the future dates we want to predict
+        future_dates = pd.date_range(start=start_timestamp, end=end_timestamp, freq=frequency)
+        future_df = pd.DataFrame(index=future_dates)
+
+        # 2. Engineer the same features for the future DataFrame
+        future_df = self._create_features(future_df)
+
+        # 3. Select the feature columns in the correct order
+        FEATURES = ['hour', 'dayofweek', 'quarter', 'month', 'year', 'dayofyear', 'dayofmonth', 'weekofyear']
+        X_future = future_df[FEATURES]
+
+        # 4. Make predictions
+        logger.info(f"Generating {len(X_future)} predictions with Random Forest model...")
+        predicted_values = self.model.predict(X_future)
         
-        logger.info(f"{self.get_model_name()} generated {len(predictions)} predictions from {start_timestamp} to {end_timestamp}.")
+        # 5. Format the output to match the application's required structure
+        predictions = []
+        for timestamp, prediction in zip(future_df.index, predicted_values):
+            # Convert pandas timestamp back to a python datetime object
+            # The API will handle making it timezone-aware for the frontend.
+            predictions.append({
+                'timestamp': timestamp.to_pydatetime(),
+                'predicted_kwh': float(prediction)
+            })
+
+        logger.info("Prediction generation complete.")
         return predictions
-
-
-if __name__ == '__main__':
-    # This block is for testing the BaselineModel in isolation.
-    # For standalone testing, a basic logging setup is needed.
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO,
-                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-    logger.info("--- Testing Baseline Model Component (Standalone) ---")
-
-    model = BaselineModelModel() # Instantiate the correct class name for the test
-
-    # Test training with sample data
-    sample_data = [
-        {'timestamp': datetime(2025, 6, 11, 8, 0), 'energy_kwh_import': 50.0},
-        {'timestamp': datetime(2025, 6, 11, 8, 15), 'energy_kwh_import': 55.0},
-        {'timestamp': datetime(2025, 6, 11, 8, 30), 'energy_kwh_import': 60.0},
-        {'timestamp': datetime(2025, 6, 11, 8, 45), 'energy_kwh_import': 58.0}
-    ]
-    model.train(sample_data)
-    logger.info(f"Model's last known kWh after training: {model.last_known_kwh}")
-
-    # Test prediction
-    prediction_start = datetime(2025, 6, 11, 9, 0)
-    prediction_end = datetime(2025, 6, 11, 10, 0) # 1 hour prediction (4 points)
-    forecasts = model.predict(prediction_start, prediction_end)
-
-    logger.info("Generated Forecasts:")
-    for f in forecasts:
-        logger.info(f"  {f['timestamp']}: {f['predicted_kwh']:.2f} kWh")
-
-    # Test with no historical data
-    model_no_data = BaselineModelModel() # Instantiate the correct class name
-    model_no_data.train([])
-    forecasts_no_data = model_no_data.predict(prediction_start, prediction_end)
-    logger.info(f"Forecasts with no training data: {forecasts_no_data}")
