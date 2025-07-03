@@ -37,6 +37,10 @@ class DlModel(BaseForecastingModel): # Class name must be DlModel to match "dl_m
     A deep learning forecasting model using a pre-trained, fine-tuned
     CNN-LSTM-Attention architecture.
     """
+    def get_required_history_count(self) -> int:
+        """Returns the specific number of records this DL model needs."""
+        return REQUIRED_HISTORY_FOR_FEATURES
+    
     def __init__(self):
         # The model name here must match the filename for the dynamic loader to work
         super().__init__("dl_model") 

@@ -3,6 +3,7 @@ import os
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Type, Tuple, Union # Ensure these are imported
+from src.models.base_model import BaseForecastingModel
 
 # --- Logging Setup ---
 # Get the logger for this module. Handlers will be configured by main.py
@@ -11,84 +12,70 @@ logger = logging.getLogger(__name__)
 #logger.setLevel(logging.INFO)
 
 
-class BaseForecastingModel(ABC):
-    """
-    Abstract Base Class for all pluggable forecasting models.
-    All concrete models must inherit from this class and implement its methods.
-    """
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        logger.info(f"Initialized BaseForecastingModel: {self.model_name}")
+# In src/forecasting_engine.py
 
-    @abstractmethod
-    def train(self, historical_data: List[Dict[str, Any]]):
-        """
-        Trains the forecasting model using historical data.
+import importlib
+import logging
+from typing import Dict, List, Any, Type
 
-        Args:
-            historical_data (List[Dict[str, Any]]): A list of dictionaries,
-                                                     each representing a meter reading.
-                                                     Expected keys: 'timestamp', 'energy_kwh_import'.
-                                                     The data is assumed to be sorted by timestamp.
-        """
-        pass
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-    @abstractmethod
-    def predict(self, start_timestamp: datetime, end_timestamp: datetime,
-                frequency: timedelta = timedelta(minutes=15)) -> List[Dict[str, Any]]:
-        """
-        Generates energy consumption predictions for a specified future time range.
+from src.models.base_model import BaseForecastingModel
 
-        Args:
-            start_timestamp (datetime): The starting timestamp for predictions.
-            end_timestamp (datetime): The ending timestamp for predictions.
-            frequency (timedelta): The interval between predictions (e.g., 15 minutes).
+logger = logging.getLogger(__name__)
 
-        Returns:
-            List[Dict[str, Any]]: A list of dictionaries, each with 'timestamp' and 'predicted_kwh'.
-        """
-        pass
-
-    def get_model_name(self) -> str:
-        """Returns the name of the forecasting model."""
-        return self.model_name
 
 def load_forecasting_model(model_name: str) -> BaseForecastingModel:
     """
-    Dynamically loads a forecasting model from the 'models' directory.
+    Dynamically imports and instantiates a forecasting model from the src/models directory.
 
     Args:
-        model_name (str): The name of the model to load (e.g., "baseline_model").
-                          Assumes the model file is 'model_name.py' and the
-                          main class is 'ModelNameModel' (CamelCase).
+        model_name (str): The underscore-separated name of the model file
+                          (e.g., 'baseline_model', 'dl_model').
 
     Returns:
-        BaseForecastingModel: An instance of the requested forecasting model.
-
+        An instance of the requested forecasting model.
+    
     Raises:
-        ValueError: If the model cannot be found or loaded.
+        ValueError: If the model module or class cannot be found.
     """
     try:
-        # Construct the module path dynamically
-        # Example: model_name="baseline_model" -> module_path="src.models.baseline_model"
+        # --- THIS IS THE LOGIC TO FIX ---
+        
+        # Convert snake_case (e.g., 'baseline_model') to CamelCase (e.g., 'BaselineModel')
+        # 1. Split the string by underscores: ['baseline', 'model']
+        # 2. Capitalize each part: ['Baseline', 'Model']
+        # 3. Join them together: 'BaselineModel'
+        
+        # OLD LOGIC (likely hardcoded or incorrect):
+        # class_name = model_name.replace('_', ' ').title().replace(' ', '') + "Model" 
+        # For 'baseline_model', this produces 'BaselineModelModel', which is wrong.
+
+        # NEW, CORRECT LOGIC:
+        class_name = "".join(word.capitalize() for word in model_name.split('_'))
+        
+        # Dynamically import the module (e.g., src.models.baseline_model)
         module_path = f"src.models.{model_name}"
-
-        # Import the module. The fromlist is important for __import__ to return the module itself.
-        module = __import__(module_path, fromlist=[model_name])
-
-        # Convention: Class name is CamelCase of the file name + "Model"
-        # e.g., baseline_model.py -> BaselineModel
-        class_name = ''.join(word.capitalize() for word in model_name.split('_')) + 'Model'
+        module = importlib.import_module(module_path)
+        
+        # Get the class from the imported module
         model_class: Type[BaseForecastingModel] = getattr(module, class_name)
+        
+        # Instantiate and return the model class
+        logger.info(f"Successfully loaded and instantiated model '{class_name}' from '{module_path}'.")
+        return model_class()
 
-        # Instantiate and return the model
-        logger.info(f"Successfully loaded forecasting model: {class_name} from {module_path}")
-        return model_class() # Models will internally set their name via super().__init__(model_name)
-
-    except (ImportError, AttributeError) as e:
-        logger.error(f"Could not load forecasting model '{model_name}'. "
-                     f"Ensure '{model_name}.py' exists in 'src/models/' "
-                     f"and contains a class named '{class_name}': {e}", exc_info=True)
+    except ImportError:
+        logger.error(f"Could not import module for model '{model_name}'. Ensure '{model_name}.py' exists in 'src/models/'.", exc_info=True)
+        raise ValueError(f"Forecasting model '{model_name}' not found or incorrectly implemented.")
+    except AttributeError:
+        logger.error(
+            f"Could not load forecasting model '{model_name}'. "
+            f"Ensure '{model_name}.py' exists in 'src/models/' and contains a class named '{class_name}'",
+            exc_info=True
+        )
         raise ValueError(f"Forecasting model '{model_name}' not found or incorrectly implemented.")
     except Exception as e:
         logger.error(f"An unexpected error occurred while loading model '{model_name}': {e}", exc_info=True)

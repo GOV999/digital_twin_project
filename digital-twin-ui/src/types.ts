@@ -1,3 +1,5 @@
+// src/types.ts
+
 export interface Meter {
   meter_id: string;
   name: string;
@@ -5,7 +7,6 @@ export interface Meter {
   meter_number: string;
   meter_no: string;
 }
-
 
 export interface MeterReading {
   reading_id: number;
@@ -33,7 +34,9 @@ export interface ForecastPoint {
   run_id?: string;  
 }
 
-export interface ForecastMetrics {
+// MODIFIED: This interface now better reflects the detailed run info.
+// It can be used for displaying metrics cards or logs of past runs.
+export interface ForecastRunDetails {
   run_id: string;
   meter_id: string;
   model_name: string;
@@ -46,6 +49,22 @@ export interface ForecastMetrics {
   run_timestamp?: string;       
 }
 
+// NEW: This is the specific type for the response from the /simulate endpoint.
+// It clearly defines all the new fields related to the graceful fallback.
+export interface SimulationResponse {
+  message: string;
+  status: 'success' | 'error';
+  run_id?: string;
+  metrics?: {
+    mae: number | null;
+    rmse: number | null;
+  };
+  model_requested?: string;
+  model_used?: string;
+  fallback_reason?: string | null;
+}
+
+// Chart data point remains the same, it's a good generic type for plotting.
 export interface ChartDataPoint {
   timestamp: number; 
   dateLabel: string; 
@@ -59,7 +78,8 @@ export interface ApiError {
   details?: any;
 }
 
-// New types for Scraper Control
+// --- Scraper Control Types ---
+// These are well-defined and don't need changes.
 
 export type ScraperRunStatus = 'running' | 'stopped' | 'error' | 'error_stopping' | 'not_started';
 

@@ -1,78 +1,83 @@
+# src/models/baseline_model.py
+
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
+
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-
-# Import the abstract base class from forecasting_engine
-from src.forecasting_engine import BaseForecastingModel
+from src.models.base_model import BaseForecastingModel
 
 logger = logging.getLogger(__name__)
 
-class BaselineModelModel(BaseForecastingModel):
+# Define features as a constant to avoid repeating the list.
+# This is a good practice to prevent bugs from typos.
+MODEL_FEATURES = [
+    'hour', 'dayofweek', 'quarter', 'month', 'year',
+    'dayofyear', 'dayofmonth', 'weekofyear'
+]
+TARGET_COLUMN = 'energy_kwh_import'
+
+# The class name is now "BaselineModel" to match the filename "baseline_model.py"
+# This is important for your dynamic loader in forecasting_engine.py.
+class BaselineModel(BaseForecastingModel):
     """
-    An improved baseline model using a simple but powerful machine learning model:
-    Random Forest Regressor.
+    An improved baseline model using a Random Forest Regressor.
 
     This model learns patterns from time-based features (e.g., hour of day,
-    day of week) to predict future energy consumption.
+    day of week) to predict future energy consumption. It serves as a strong,
+    traditional ML baseline to compare against more complex DL models.
     """
     def __init__(self):
         super().__init__("baseline_model")
         # Initialize the machine learning model.
-        # n_estimators=100 means it will build 100 decision trees.
-        # random_state=42 ensures that the model gives the same results every time for the same data.
+        # n_estimators=100 is a good default.
+        # random_state=42 ensures reproducibility.
+        # n_jobs=-1 uses all available CPU cores for faster training.
         self.model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
         self.is_trained = False
-        logger.info(f"Initialized Machine Learning Baseline (Random Forest).")
+        logger.info("Initialized Machine Learning Baseline (Random Forest).")
 
     def _create_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Creates time-series features from a datetime index.
-        These features are what the model will learn from.
-        """
-        df['hour'] = df.index.hour
-        df['dayofweek'] = df.index.dayofweek  # Monday=0, Sunday=6
-        df['quarter'] = df.index.quarter
-        df['month'] = df.index.month
-        df['year'] = df.index.year
-        df['dayofyear'] = df.index.dayofyear
-        df['dayofmonth'] = df.index.day
-        df['weekofyear'] = df.index.isocalendar().week.astype(int)
-        return df
+        """Creates time-series features from a datetime index."""
+        # This is excellent feature engineering for a baseline.
+        df_featured = df.copy()
+        df_featured['hour'] = df_featured.index.hour
+        df_featured['dayofweek'] = df_featured.index.dayofweek
+        df_featured['quarter'] = df_featured.index.quarter
+        df_featured['month'] = df_featured.index.month
+        df_featured['year'] = df_featured.index.year
+        df_featured['dayofyear'] = df_featured.index.dayofyear
+        df_featured['dayofmonth'] = df_featured.index.day
+        df_featured['weekofyear'] = df_featured.index.isocalendar().week.astype(int)
+        return df_featured
 
     def train(self, historical_data: List[Dict[str, Any]]):
-        """
-        Trains the Random Forest model on the historical data.
-        
-        Args:
-            historical_data: A list of reading dictionaries.
-        """
+        """Trains the Random Forest model on the historical data."""
         if not historical_data:
             logger.warning(f"No historical data provided for {self.get_model_name()} training. Model not trained.")
+            self.is_trained = False
             return
 
         try:
-            # 1. Convert data to a pandas DataFrame
+            # 1. Convert data to a pandas DataFrame and prepare it
             df = pd.DataFrame(historical_data)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df = df.set_index('timestamp')
 
             # 2. Ensure we only train on valid data
-            df.dropna(subset=['energy_kwh_import'], inplace=True)
+            df.dropna(subset=[TARGET_COLUMN], inplace=True)
             if df.empty:
-                logger.warning("Historical data is empty after dropping nulls. Model not trained.")
+                logger.warning("Historical data is empty after dropping null kWh values. Model not trained.")
+                self.is_trained = False
                 return
 
-            # 3. Feature Engineering: Create features from the timestamp index
-            df = self._create_features(df)
+            # 3. Feature Engineering
+            df_featured = self._create_features(df)
             
             # 4. Define our features (X) and target (y)
-            FEATURES = ['hour', 'dayofweek', 'quarter', 'month', 'year', 'dayofyear', 'dayofmonth', 'weekofyear']
-            TARGET = 'energy_kwh_import'
-            
-            X_train = df[FEATURES]
-            y_train = df[TARGET]
+            X_train = df_featured[MODEL_FEATURES]
+            y_train = df_featured[TARGET_COLUMN]
 
             # 5. Train the model
             logger.info(f"Training Random Forest model with {len(X_train)} data points...")
@@ -81,13 +86,16 @@ class BaselineModelModel(BaseForecastingModel):
             logger.info("Model training complete.")
 
         except Exception as e:
-            logger.error(f"Error during model training: {e}", exc_info=True)
+            logger.error(f"Error during Random Forest model training: {e}", exc_info=True)
             self.is_trained = False
 
+    # --- CRITICAL FIX: The signature now matches the BaseForecastingModel contract ---
     def predict(self, start_timestamp: datetime, end_timestamp: datetime,
+                historical_data: List[Dict[str, Any]], # This argument is now present
                 frequency: timedelta = timedelta(minutes=15)) -> List[Dict[str, Any]]:
         """
         Generates predictions using the trained Random Forest model.
+        The 'historical_data' argument is unused here but required by the base class.
         """
         if not self.is_trained:
             logger.warning(f"{self.get_model_name()} has not been trained. Returning empty predictions.")
@@ -98,11 +106,10 @@ class BaselineModelModel(BaseForecastingModel):
         future_df = pd.DataFrame(index=future_dates)
 
         # 2. Engineer the same features for the future DataFrame
-        future_df = self._create_features(future_df)
+        future_df_featured = self._create_features(future_df)
 
         # 3. Select the feature columns in the correct order
-        FEATURES = ['hour', 'dayofweek', 'quarter', 'month', 'year', 'dayofyear', 'dayofmonth', 'weekofyear']
-        X_future = future_df[FEATURES]
+        X_future = future_df_featured[MODEL_FEATURES]
 
         # 4. Make predictions
         logger.info(f"Generating {len(X_future)} predictions with Random Forest model...")
@@ -111,8 +118,6 @@ class BaselineModelModel(BaseForecastingModel):
         # 5. Format the output to match the application's required structure
         predictions = []
         for timestamp, prediction in zip(future_df.index, predicted_values):
-            # Convert pandas timestamp back to a python datetime object
-            # The API will handle making it timezone-aware for the frontend.
             predictions.append({
                 'timestamp': timestamp.to_pydatetime(),
                 'predicted_kwh': float(prediction)

@@ -66,130 +66,150 @@ class DigitalTwin:
             logger.error(f"Error fetching historical data for Meter {self.meter_id}: {e}", exc_info=True)
             return []
 
+    # In src/digital_twin.py
+
     def run_simulation(self,
-                       simulation_duration_hours: int = 24,
-                       prediction_horizon_hours: int = 24,
-                       model_name: str = "baseline_model",
-                       data_for_training_hours: int = 24,
-                       explicit_prediction_start_time: Optional[datetime] = None, # New argument
-                       explicit_prediction_end_time: Optional[datetime] = None) -> Dict[str, Any]: # New argument
+                    simulation_duration_hours: int = 24,
+                    prediction_horizon_hours: int = 24,
+                    model_name: str = "baseline_model",
+                    data_for_training_hours: int = 24,
+                    explicit_prediction_start_time: Optional[datetime] = None,
+                    explicit_prediction_end_time: Optional[datetime] = None) -> Dict[str, Any]:
         """
-        Runs a simulation of energy demand for the digital twin.
+        Runs a simulation of energy demand, with graceful fallback to a simpler
+        model if the requested model's data requirements are not met.
 
         Args:
             simulation_duration_hours (int): The total duration of the simulation in hours.
-                                             This defines the time range for which the twin
-                                             will generate predicted/simulated data.
             prediction_horizon_hours (int): How far into the future the model predicts.
-                                            This is typically the same as simulation_duration_hours
-                                            for continuous simulation, or shorter if you want
-                                            to simulate a longer period using iterative predictions.
             model_name (str): The name of the forecasting model to use.
             data_for_training_hours (int): How many hours of recent historical data
                                             to fetch for training the model before simulation.
             explicit_prediction_start_time (Optional[datetime]): If provided, use this as the start time
-                                                                 for predictions. Must be timezone-aware.
+                                                                for predictions. Must be timezone-aware.
             explicit_prediction_end_time (Optional[datetime]): If provided, use this as the end time
-                                                               to predictions. Must be timezone-aware.
+                                                            for predictions. Must be timezone-aware.
 
         Returns:
-            Dict[str, Any]: Contains simulated data, actual data (if available in the simulation range),
-                            forecasts, and accuracy metrics.
+            Dict[str, Any]: A dictionary containing the results of the simulation,
+                            including which model was requested vs. used, metrics,
+                            and the predicted data.
         """
-        if not self.forecasting_model or self.forecasting_model.get_model_name() != model_name:
-            self.load_model(model_name)
+        logger.info(f"Starting simulation run for Meter {self.meter_id}. Requested model: '{model_name}'.")
+
+        # 1. GET HISTORICAL DATA
+        # This data will be used for both the fallback check and model training.
+        historical_data = self.get_historical_data(hours=data_for_training_hours)
+
+        # 2. DECIDE WHICH MODEL TO USE (GRACEFUL FALLBACK LOGIC)
+        model_to_use = model_name
+        fallback_reason = None
+        
+        try:
+            # Temporarily load the requested model to check its data requirements.
+            requested_model = load_forecasting_model(model_name)
+            required_records = requested_model.get_required_history_count()
+            
+            if len(historical_data) < required_records:
+                logger.warning(
+                    f"Model '{model_name}' requires {required_records} records, "
+                    f"but only {len(historical_data)} are available. "
+                    f"Falling back to 'baseline_model'."
+                )
+                model_to_use = "baseline_model"
+                fallback_reason = (
+                    f"Insufficient data for '{model_name}'. "
+                    f"Had {len(historical_data)} of {required_records} required records. Used baseline instead."
+                )
+        except Exception as e:
+            logger.error(f"Failed to load requested model '{model_name}': {e}. Falling back to baseline.", exc_info=True)
+            model_to_use = "baseline_model"
+            fallback_reason = f"Could not load requested model '{model_name}'. Used baseline instead."
+        
+        # 3. LOAD & TRAIN THE FINAL MODEL
+        # Load the model that was determined to be usable (either the original or the fallback).
+        self.load_model(model_to_use)
 
         if not self.forecasting_model:
-            logger.error("No forecasting model loaded. Cannot run simulation.")
-            return {}
+            # This is a critical failure if even the baseline model can't be loaded.
+            raise RuntimeError("Could not load any forecasting model, including the baseline.")
 
-        logger.info(f"Running digital twin simulation for Meter {self.meter_id} using {model_name} model...")
-
-        # 1. Get historical data for model training
-        historical_data = self.get_historical_data(hours=data_for_training_hours)
-        if not historical_data:
-            logger.warning(f"Not enough historical data to train model for Meter {self.meter_id}. Trying to get latest reading only.")
-            self.get_latest_real_reading() # Try to get latest even if historical is empty
-
-
-        # 2. Train the model
         try:
             self.forecasting_model.train(historical_data)
             training_data_start = historical_data[0]['timestamp'] if historical_data else None
             training_data_end = historical_data[-1]['timestamp'] if historical_data else None
         except Exception as e:
-            logger.error(f"Error during model training for Meter {self.meter_id}: {e}", exc_info=True)
-            return {}
+            logger.error(f"Error during model training for Meter {self.meter_id} with model '{model_to_use}': {e}", exc_info=True)
+            # Return a dictionary indicating failure but also what happened.
+            return {
+                "meter_id": self.meter_id,
+                "model_requested": model_name,
+                "model_used": model_to_use,
+                "fallback_reason": "Model training failed.",
+                "metrics": {"mae": None, "rmse": None},
+                "run_id": None
+            }
 
-        # 3. Define simulation/prediction time window
+        # 4. DEFINE SIMULATION/PREDICTION TIME WINDOW
+        # This logic remains the same as your original version.
         if explicit_prediction_start_time and explicit_prediction_end_time:
             prediction_start_time = explicit_prediction_start_time
             prediction_end_time = explicit_prediction_end_time
             logger.info(f"Using explicit prediction times: {prediction_start_time} to {prediction_end_time}")
         else:
-            # Original logic: infer from historical data or current time
             if historical_data:
-                sorted_historical = sorted(historical_data, key=lambda x: x['timestamp'])
-                last_historical_timestamp = sorted_historical[-1]['timestamp']
+                last_historical_timestamp = max(d['timestamp'] for d in historical_data)
                 prediction_start_time = last_historical_timestamp + timedelta(minutes=15)
-            elif self.latest_real_reading:
-                prediction_start_time = self.latest_real_reading['timestamp'] + timedelta(minutes=15)
             else:
-                now_tz = datetime.now(db_manager.get_timezone()).replace(second=0, microsecond=0) # Corrected line
-                minutes_to_next_quarter = 15 - (now_tz.minute % 15)
-                if minutes_to_next_quarter == 15:
-                    prediction_start_time = now_tz
+                latest_reading = self.get_latest_real_reading()
+                if latest_reading:
+                    prediction_start_time = latest_reading['timestamp'] + timedelta(minutes=15)
                 else:
+                    now_tz = datetime.now(db_manager.get_timezone()).replace(second=0, microsecond=0)
+                    minutes_to_next_quarter = 15 - (now_tz.minute % 15) if now_tz.minute % 15 != 0 else 0
                     prediction_start_time = now_tz + timedelta(minutes=minutes_to_next_quarter)
-                logger.warning(f"No historical or latest real data. Starting prediction from current time: {prediction_start_time}")
-
+                    logger.warning(f"No historical data; starting prediction from next quarter: {prediction_start_time}")
+            
             prediction_end_time = prediction_start_time + timedelta(hours=prediction_horizon_hours)
             logger.info(f"Inferred prediction times: {prediction_start_time} to {prediction_end_time}")
 
-        # Ensure start time is before end time
         if prediction_start_time >= prediction_end_time:
-            logger.error("Prediction start time is on or after end time. Adjusting end time to be at least 15 min after start.")
-            prediction_end_time = prediction_start_time + timedelta(minutes=15) # Ensure at least one prediction point
+            logger.error("Prediction start time is on or after end time. Cannot generate forecast.")
+            prediction_end_time = prediction_start_time + timedelta(minutes=15)
 
-        # 4. Record the forecast run before predictions
+        # 5. RECORD THE FORECAST RUN
         current_run_id = str(uuid.uuid4())
         try:
-            current_run_id = db_manager.insert_forecast_run(
+            db_manager.insert_forecast_run(
                 run_id=current_run_id,
                 meter_id=self.meter_id,
-                model_name=model_name,
+                model_name=model_to_use,  # IMPORTANT: Log the model that was actually used
                 prediction_start_time=prediction_start_time,
                 prediction_end_time=prediction_end_time,
                 training_data_start=training_data_start,
-                training_data_end=training_data_end,
-                mae=None,
-                rmse=None
+                training_data_end=training_data_end
             )
             logger.info(f"New forecast run initiated with ID: {current_run_id}")
         except Exception as e:
             logger.error(f"Failed to record forecast run in DB: {e}", exc_info=True)
-            current_run_id = None
+            current_run_id = None # Ensure run_id is None if DB write fails
 
-        # 5. Generate forecasts (these are the simulated readings)
+        # 6. GENERATE FORECASTS
         simulated_readings_output = self.forecasting_model.predict(
             start_timestamp=prediction_start_time,
             end_timestamp=prediction_end_time,
-            frequency=timedelta(minutes=15) # Assuming 15-min intervals
+            historical_data=historical_data,  # Pass historical data to the predict method
+            frequency=timedelta(minutes=30)
         )
         logger.info(f"Generated {len(simulated_readings_output)} simulated readings.")
 
-        # 6. Fetch actuals for the simulation period for comparison (if overlap)
+        # 7. FETCH ACTUALS & CALCULATE METRICS
         actuals_in_simulation_range = db_manager.get_meter_readings_in_range(
             self.meter_id, prediction_start_time, prediction_end_time
         )
-        logger.info(f"Retrieved {len(actuals_in_simulation_range)} actual readings within the simulation range for comparison.")
-
-        # 7. Calculate performance metrics (only if actuals and predictions overlap)
         metrics = calculate_forecast_metrics(actuals_in_simulation_range, simulated_readings_output)
-        if not metrics or (metrics.get('mae') is None and metrics.get('rmse') is None):
-            logging.warning("No metrics calculated (likely no overlapping actual data for comparison).")
 
-        # 8. Store forecast predictions and update run metrics
+        # 8. STORE PREDICTIONS & UPDATE RUN METRICS
         if current_run_id:
             predictions_to_store = []
             actual_map = {a['timestamp']: a['energy_kwh_import'] for a in actuals_in_simulation_range}
@@ -199,24 +219,20 @@ class DigitalTwin:
                     'predicted_kwh': pred['predicted_kwh'],
                     'actual_kwh': actual_map.get(pred['timestamp'])
                 })
+            
             try:
                 db_manager.insert_forecast_predictions(current_run_id, predictions_to_store)
-                logger.info(f"Stored {len(predictions_to_store)} forecast predictions for run_id {current_run_id}.")
-                
-                # Update metrics if they were calculated
-                if metrics and (metrics.get('mae') is not None or metrics.get('rmse') is not None):
+                if metrics.get('mae') is not None:
                     db_manager.update_forecast_run_metrics(current_run_id, mae=metrics.get('mae'), rmse=metrics.get('rmse'))
-                    logger.info(f"Updated metrics for forecast run_id {current_run_id}.")
-                else:
-                    logger.info(f"No valid metrics to update for run_id {current_run_id}.")
-
             except Exception as e:
-                logger.error(f"Failed to store predictions or update metrics for run_id {current_run_id}: {e}", exc_info=True)
+                logger.error(f"Failed to store predictions or metrics for run {current_run_id}: {e}", exc_info=True)
 
-
+        # 9. RETURN COMPLETE RESULTS
         return {
             "meter_id": self.meter_id,
-            "model_used": model_name,
+            "model_requested": model_name,
+            "model_used": model_to_use,
+            "fallback_reason": fallback_reason,
             "simulation_start": prediction_start_time,
             "simulation_end": prediction_end_time,
             "simulated_readings": simulated_readings_output,

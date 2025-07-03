@@ -1,6 +1,9 @@
+// src/services/apiService.ts
+
 import { API_BASE_URL } from '../constants';
 import * as CustomTypes from '../types';
 
+// This helper function is well-written and requires no changes.
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorData;
@@ -17,11 +20,11 @@ async function handleResponse<T>(response: Response): Promise<T> {
   if (response.status === 204) {
     return {} as T;
   }
-  // This can return null if the body is empty
   const text = await response.text();
   return text ? JSON.parse(text) : null;
 }
 
+// No changes needed for these functions
 export const fetchConfiguredMeters = async (): Promise<CustomTypes.Meter[]> => {
   const response = await fetch(`${API_BASE_URL}/config/meters`);
   return handleResponse<CustomTypes.Meter[]>(response);
@@ -41,46 +44,56 @@ export const fetchLatestForecast = async (meterId: string): Promise<CustomTypes.
   const response = await fetch(`${API_BASE_URL}/meters/${meterId}/latest_forecast`);
   const data = await handleResponse<CustomTypes.ForecastPoint[] | { forecast?: CustomTypes.ForecastPoint[] }>(response);
 
-  // This logic is good, handles different possible response shapes
   if (!data) return [];
   if (Array.isArray(data)) {
     return data;
   }
-  if (data && Array.isArray(data.forecast)) {
+  if (data && 'forecast' in data && Array.isArray(data.forecast)) {
      return data.forecast;
   }
   return []; 
 };
 
-// --- THIS FUNCTION IS THE ONE TO FIX ---
-export const fetchLatestForecastDetails = async (meterId: string): Promise<CustomTypes.ForecastMetrics | null> => {
+// --- MODIFIED FUNCTION ---
+// Renamed the return type from ForecastMetrics to the more accurate ForecastRunDetails
+export const fetchLatestForecastDetails = async (meterId: string): Promise<CustomTypes.ForecastRunDetails | null> => {
   const response = await fetch(`${API_BASE_URL}/meters/${meterId}/latest_forecast_details`);
   if (response.status === 404) {
     return null;
   }
-  const data = await handleResponse<CustomTypes.ForecastMetrics | {} | null>(response);
+  const data = await handleResponse<CustomTypes.ForecastRunDetails | {} | null>(response);
 
-  // ** THE FIX IS HERE **
-  // Add a check to ensure `data` is a non-null object before calling Object.keys()
   if (!data || Object.keys(data).length === 0) {
     return null;
   }
   
-  return data as CustomTypes.ForecastMetrics;
+  return data as CustomTypes.ForecastRunDetails;
 };
 
-export const triggerSimulation = async (meterId: string, durationHours: number): Promise<{ message: string; run_id?: string; metrics?: any }> => {
+// --- MODIFIED FUNCTION ---
+// Updated to accept all necessary parameters for the simulation
+// and to return the new, more descriptive SimulationResponse type.
+export const triggerSimulation = async (
+  meterId: string,
+  durationHours: number,
+  modelName: string,
+  trainingHours: number
+): Promise<CustomTypes.SimulationResponse> => {
   const response = await fetch(`${API_BASE_URL}/meters/${meterId}/simulate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ duration_hours: durationHours }),
+    body: JSON.stringify({ 
+      duration_hours: durationHours,
+      model_name: modelName,
+      training_hours: trainingHours
+    }),
   });
-  return handleResponse<{ message: string; run_id?: string; metrics?: any }>(response);
+  return handleResponse<CustomTypes.SimulationResponse>(response);
 };
 
-// --- Scraper API Functions ---
+// --- Scraper API Functions (No changes needed) ---
 
 export const startScraper = async (meterId: string): Promise<CustomTypes.ScraperActionResponse> => {
   const response = await fetch(`${API_BASE_URL}/scraper/start`, { 

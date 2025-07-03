@@ -225,21 +225,80 @@ def run_api_server_command(args):
             run_details['rmse'] = None
         return jsonify(run_details)
 
+    
+
     @flask_app.route('/api/meters/<meter_id>/simulate', methods=['POST'])
     def trigger_simulation_endpoint(meter_id):
-        data = request.get_json()
-        duration_hours = int(data['duration_hours'])
-        model_name = str(data.get('model_name', "baseline_model"))
-        training_hours = int(data.get('training_hours', 24 * 7))
-        twin = DigitalTwin(meter_id=meter_id)
-        results = twin.run_simulation(simulation_duration_hours=duration_hours, prediction_horizon_hours=duration_hours, model_name=model_name, data_for_training_hours=training_hours)
-        simulation_metrics = results.get('metrics', {})
-        if 'mae' in simulation_metrics and isinstance(simulation_metrics['mae'], float) and simulation_metrics['mae'] != simulation_metrics['mae']:
-            simulation_metrics['mae'] = None
-        if 'rmse' in simulation_metrics and isinstance(simulation_metrics['rmse'], float) and simulation_metrics['rmse'] != simulation_metrics['rmse']:
-            simulation_metrics['rmse'] = None
-        return jsonify({"message": "Simulation triggered successfully", "run_id": results.get('run_id'), "metrics": simulation_metrics}), 200
+        """
+        Triggers a forecasting simulation for a given meter.
+        Handles different models and ensures sufficient data is requested for complex models.
+        """
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"message": "Request body must be JSON.", "status": "error"}), 400
 
+            # --- Extract and validate parameters ---
+            duration_hours = int(data.get('duration_hours', 24))
+            model_name = str(data.get('model_name', "baseline_model"))
+            
+            # Set a reasonable default for training hours
+            default_training_hours = 24 * 7 * 2  # 2 weeks
+            training_hours = int(data.get('training_hours', default_training_hours))
+            
+            # --- Logic to enforce minimum data for specific models ---
+            # This is a good place to ensure you request enough data for the DL model
+            # to avoid unnecessary fallbacks caused by a small frontend request.
+            if model_name == 'dl_model' and training_hours < 168: # 168 hours = 7 days
+                logger.warning(
+                    f"DL model requested with only {training_hours} hours of history. "
+                    f"Increasing to the required minimum of 168 hours."
+                )
+                training_hours = 168
+
+            # --- Run the simulation ---
+            twin = DigitalTwin(meter_id=meter_id)
+            results = twin.run_simulation(
+                simulation_duration_hours=duration_hours,
+                prediction_horizon_hours=duration_hours, # Assuming these are the same for now
+                model_name=model_name,
+                data_for_training_hours=training_hours
+            )
+            
+            # --- Process results for a clean JSON response ---
+            simulation_metrics = results.get('metrics', {})
+            
+            # Your excellent NaN handling logic
+            if 'mae' in simulation_metrics and isinstance(simulation_metrics['mae'], float) and simulation_metrics['mae'] != simulation_metrics['mae']:
+                simulation_metrics['mae'] = None
+            if 'rmse' in simulation_metrics and isinstance(simulation_metrics['rmse'], float) and simulation_metrics['rmse'] != simulation_metrics['rmse']:
+                simulation_metrics['rmse'] = None
+
+            # --- Construct the new, informative response payload ---
+            # This payload now includes details about model fallback
+            response_data = {
+                "message": "Simulation completed successfully.",
+                "status": "success",
+                "run_id": results.get('run_id'),
+                "metrics": simulation_metrics,
+                "model_requested": results.get('model_requested'),
+                "model_used": results.get('model_used'),
+                "fallback_reason": results.get('fallback_reason')
+            }
+            
+            return jsonify(response_data), 200
+
+        except (ValueError, KeyError) as e:
+            # Catches issues from bad request data (e.g., non-integer hours)
+            # or from errors raised within the simulation (e.g., "Not enough data")
+            logger.warning(f"Simulation for meter '{meter_id}' failed with a client or data error: {str(e)}")
+            return jsonify({"message": str(e), "status": "error"}), 400
+            
+        except Exception as e:
+            # Catch-all for unexpected server errors
+            logger.error(f"Unhandled error during simulation for meter '{meter_id}': {e}", exc_info=True)
+            return jsonify({"message": "An internal server error occurred during the simulation.", "status": "error"}), 500
+        
     @flask_app.route('/api/scraper/start', methods=['POST'])
     def start_scraper_endpoint():
         data = request.get_json()
