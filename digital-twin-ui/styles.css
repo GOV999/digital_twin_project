@@ -428,169 +428,248 @@ body {
 
 /* Add these new styles to your existing styles.css */
 
-/* Simulation Controls */
-.simulation-controls.card { /* Applied .card for consistent styling */
-  padding: 1rem; /* Adjust padding as needed */
+/* --- Main Dashboard Layout --- */
+.dashboard-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  align-items: start; /* Aligns items to the top of the grid row */
+}
+
+/* --- Simulation Controls Card Specific Styles --- */
+.simulation-controls.card {
+  display: flex;
+  flex-direction: column; /* Stack controls vertically */
+  align-items: flex-start; /* Align all items to the left */
+  gap: 1rem; /* Space between control groups */
+}
+
+.control-group {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem; /* space-y-3 equivalent */
-  align-items: flex-start; /* Align items to the start for better layout */
+  gap: 0.25rem;
+  width: 100%; /* Make control groups take full width of the card */
+}
+
+.control-label {
+  font-size: 0.8rem;
+  color: #a0aec0;
+  text-transform: uppercase;
+  font-weight: 500;
 }
 
 .run-simulation-button {
   padding: 0.6rem 1rem;
   background-color: #16a34a; /* bg-green-600 */
   color: white;
-  border-radius: 0.5rem; /* rounded-lg */
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); /* shadow-md */
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
   transition: background-color 0.2s, opacity 0.2s;
   border: none;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 500; /* font-medium */
-  width: 100%; /* Make button full width of its container */
+  font-weight: 500;
+  margin-top: 0.5rem; /* Add some space above the button */
 }
 
 .run-simulation-button:hover {
-  background-color: #15803d; /* hover:bg-green-700 */
+  background-color: #15803d;
 }
 
 .run-simulation-button:disabled {
-  background-color: #4ade80; /* bg-green-400 for disabled */
+  background-color: #4ade80;
   opacity: 0.7;
   cursor: not-allowed;
 }
 
 .run-simulation-button .spinner-sm {
   margin-right: 0.5rem;
-  border-top-color: white; /* Ensure spinner is visible on button */
-  border-bottom-color: white;
 }
 
-/* Ensure error messages related to simulation also look fine */
-.dashboard-controls + .error-message-container, /* Error below controls */
-.simulation-controls + .error-message-container { /* Error within simulation controls */
+.grid-analysis-layout {
+  display: grid;
+  grid-template-columns: 1fr; /* Stack on small screens */
+  gap: 2rem;
   margin-top: 1rem;
 }
 
-/* Adjustments for dashboard controls layout with simulation button */
-@media (min-width: 640px) { /* sm: breakpoint */
-  .dashboard-controls {
-    /* Existing: grid-template-columns: repeat(2, minmax(0, 1fr)); */
-    /* If you want metrics and simulation controls side-by-side */
-  }
-  .simulation-controls.card {
-     width: auto; /* Allow it to size based on content or grid column */
-  }
-  .run-simulation-button {
-    width: auto; /* Button doesn't have to be full width on larger screens */
+@media (min-width: 768px) { /* On medium screens and up, show side-by-side */
+  .grid-analysis-layout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (min-width: 1024px) { /* lg: breakpoint */
-  .dashboard-controls {
-    /* Existing: grid-template-columns: 1fr auto; */
-    /* This might need adjustment if metrics + sim controls should stack or rearrange */
-    /* Example: if they stack, revert to 1fr or adjust grid areas */
-  }
-  .simulation-controls.card {
-     /* max-width: 300px; /* from previous prediction duration selector */
-     /* This max-width might be too restrictive now with a button. Adjust as needed. */
-  }
+.analysis-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap; /* Allow wrapping on small screens */
+  gap: 0.5rem;
+}
+
+.section-header h4 {
+  font-size: 1.125rem; /* text-lg */
+  font-weight: 600;
+  color: #cbd5e1; /* text-slate-300 */
+  margin: 0;
+}
+
+.stats-pills {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem; /* text-xs */
+}
+
+.stats-pills span {
+  background-color: #334155; /* bg-slate-700 */
+  color: #94a3b8; /* text-slate-400 */
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px; /* rounded-full */
+}
+
+.sparkline-container {
+  width: 100%;
+  height: 80px;
+  background-color: rgba(15, 23, 42, 0.5); /* bg-slate-900/50 */
+  border-radius: 0.375rem; /* rounded-md */
+  padding: 0.5rem 0;
+}
+
+/* Timestamp footnote (already existed but good to ensure it's there) */
+.timestamp-footnote {
+  font-size: 0.75rem;
+  color: #64748b; /* text-slate-500 */
+  text-align: right;
+  margin-top: 1rem;
+  width: 100%;
+  display: block;
+}
+
+/* CSS for EventSimulationCard */
+/* In styles.css */
+
+.card-subtitle {
+  font-size: 0.9rem;
+  color: #9ca3af; /* text-gray-400 */
+  margin-top: -0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.event-simulation-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.event-control-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  border: 1px solid #4b5563; /* slate-600 */
+  background-color: #334155; /* slate-700 */
+  color: #e2e8f0;
+  border-radius: 0.375rem;
+  box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+/* Add arrow for select dropdowns using this class */
+.event-control-input[as="select"] {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1.5em 1.5em;
+  padding-right: 2.5rem;
+}
+
+.event-control-input:focus {
+  outline: none;
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.3);
 }
 
 
+/* --- Scraper Controls (No changes, included for completeness) --- */
 .scraper-controls-container.card {
-  margin-top: 1.5rem; /* Add some space above this section */
+  margin-top: 1.5rem;
 }
 
 .scraper-status-section {
   display: flex;
   align-items: center;
-  gap: 0.75rem; /* space-x-3 */
+  gap: 0.75rem;
   margin-bottom: 1rem;
-  font-size: 1.125rem; /* text-lg */
-  color: #cbd5e1; /* text-slate-300 */
+  font-size: 1.125rem;
+  color: #cbd5e1;
 }
 
 .scraper-status {
-  font-weight: 600; /* font-semibold */
+  font-weight: 600;
   text-transform: capitalize;
 }
 .text-green-400 { color: #4ade80; }
 .text-yellow-400 { color: #facc15; }
-.text-gray-400 { color: #9ca3af; }
-/* .text-red-400 is already defined */
+/* .text-gray-400 and .text-red-400 are already defined */
 
 .scraper-buttons {
   display: flex;
-  gap: 0.75rem; /* space-x-3 */
+  gap: 0.75rem;
   margin-bottom: 1rem;
-  flex-wrap: wrap; /* Allow buttons to wrap on smaller screens */
+  flex-wrap: wrap;
 }
 
-.scraper-buttons .button { /* Style buttons within this container specifically if needed */
+.scraper-buttons .button {
   padding: 0.5rem 1rem;
 }
 
-.start-scraper-button {
-  background-color: #22c55e; /* bg-green-500 */
-}
-.start-scraper-button:hover {
-  background-color: #16a34a; /* hover:bg-green-600 */
-}
-.start-scraper-button:disabled {
-  background-color: #86efac; /* bg-green-300 */
-  opacity: 0.7;
-}
+.start-scraper-button { background-color: #22c55e; }
+.start-scraper-button:hover { background-color: #16a34a; }
+.start-scraper-button:disabled { background-color: #86efac; opacity: 0.7; }
 
+.stop-scraper-button { background-color: #ef4444; }
+.stop-scraper-button:hover { background-color: #dc2626; }
+.stop-scraper-button:disabled { background-color: #fca5a5; opacity: 0.7; }
 
-.stop-scraper-button {
-  background-color: #ef4444; /* bg-red-500 */
-}
-.stop-scraper-button:hover {
-  background-color: #dc2626; /* hover:bg-red-600 */
-}
-.stop-scraper-button:disabled {
-  background-color: #fca5a5; /* bg-red-300 */
-   opacity: 0.7;
-}
+.refresh-logs-button { background-color: #3b82f6; }
+.refresh-logs-button:hover { background-color: #2563eb; }
+.refresh-logs-button:disabled { background-color: #93c5fd; opacity: 0.7; }
 
-.refresh-logs-button {
-  background-color: #3b82f6; /* bg-blue-500 */
-}
-.refresh-logs-button:hover {
-  background-color: #2563eb; /* hover:bg-blue-600 */
-}
-.refresh-logs-button:disabled {
-  background-color: #93c5fd; /* bg-blue-300 */
-  opacity: 0.7;
-}
-
-
-.scraper-log-display-container {
-  margin-top: 1rem;
-}
-
-.scraper-log-title {
-  font-size: 1rem; /* text-base or lg */
-  font-weight: 500; /* font-medium */
-  color: #7dd3fc; /* text-sky-300 */
-  margin-bottom: 0.5rem;
-}
-
+.scraper-log-display-container { margin-top: 1rem; }
+.scraper-log-title { font-size: 1rem; font-weight: 500; color: #7dd3fc; margin-bottom: 0.5rem; }
 .scraper-log-display {
-  background-color: #0f172a; /* bg-slate-900 */
-  color: #94a3b8; /* text-slate-400 */
+  background-color: #0f172a;
+  color: #94a3b8;
   padding: 0.75rem;
-  border-radius: 0.375rem; /* rounded-md */
-  max-height: 300px; /* Adjust as needed */
+  border-radius: 0.375rem;
+  max-height: 300px;
   overflow-y: auto;
-  font-family: 'Courier New', Courier, monospace; /* Monospace for logs */
-  font-size: 0.8rem; /* Slightly smaller for logs */
-  white-space: pre-wrap; /* Wrap long lines */
-  word-break: break-all; /* Break long words if necessary */
-  border: 1px solid #334155; /* border-slate-700 */
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid #334155;
 }
+
+/* --- Grid Status Card (No changes, included for completeness) --- */
+.grid-status-card { display: flex; flex-direction: column; }
+.grid-status-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; flex-grow: 1; padding-bottom: 1rem; }
+.metric-group { display: flex; flex-direction: column; }
+.metric-label { font-size: 0.8rem; color: #a0aec0; margin-bottom: 0.25rem; text-transform: uppercase; }
+.phase-values { display: flex; gap: 1rem; font-size: 1.1rem; font-weight: 500; }
+.timestamp-footnote { font-size: 0.75rem; color: #718096; text-align: right; margin-top: auto; }
+
+/* --- Notices (No changes, included for completeness) --- */
+.notice { padding: 1rem; border-radius: 0.5rem; font-weight: 500; }
+.success-notice { background-color: rgba(45, 212, 191, 0.1); color: #5eead4; border: 1px solid #2dd4bf; }

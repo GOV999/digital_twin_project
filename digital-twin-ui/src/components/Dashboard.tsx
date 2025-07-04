@@ -1,3 +1,5 @@
+// src/components/Dashboard.tsx
+
 import React, { useState, useEffect, useCallback } from 'react';
 import * as CustomTypes from '../types'; 
 import * as apiService from '../services/apiService';
@@ -8,12 +10,15 @@ import {
   CHART_HISTORICAL_HOURS_DISPLAY 
 } from '../constants';
 
+// Import all child components
 import MetricsCard from './MetricsCard';
 import DemandChart from './DemandChart';
 import ReadingsTable from './ReadingsTable';
 import Spinner from './Spinner';
 import ErrorMessage from './ErrorMessage';
 import ScraperControl from './ScraperControl';
+import GridStatusCard from './GridStatusCard';
+import EventSimulationCard from './EventSimulationCard'; // <-- Import the new card
 
 interface DashboardProps {
   selectedMeterId: string;
@@ -21,7 +26,6 @@ interface DashboardProps {
   onSimulationComplete: () => void; 
 }
 
-// --- NEW: Define model options for the UI ---
 const MODEL_OPTIONS = [
   { value: 'baseline_model', label: 'Baseline Model' },
   { value: 'dl_model', label: 'DL Model (CNN-LSTM)' },
@@ -40,13 +44,13 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   const [error, setError] = useState<string | null>(null);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
-  const [simulationNotice, setSimulationNotice] = useState<string | null>(null); // For success/fallback messages
+  const [simulationNotice, setSimulationNotice] = useState<string | null>(null);
 
-  // --- NEW: State for Simulation Parameters ---
+  // --- State for Simulation Parameters ---
   const [selectedPredictionHours, setSelectedPredictionHours] = useState<number>(PREDICTION_DURATION_OPTIONS[0].value);
   const [selectedModel, setSelectedModel] = useState<string>(MODEL_OPTIONS[0].value);
 
-  // --- Data Fetching Logic (largely unchanged) ---
+  // --- Data Fetching Logic ---
   const loadDashboardData = useCallback(async () => {
     if (!selectedMeterId) return;
     setLoading(true);
@@ -63,7 +67,6 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
       setMetrics(metricData);
       setLatestReadings(latestData);
     } catch (err) {
-      console.error("[Dashboard] Failed to load data:", err);
       setError(err instanceof Error ? err.message : "An unknown error occurred.");
     } finally {
       setLoading(false);
@@ -74,15 +77,14 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
     loadDashboardData();
   }, [loadDashboardData, refreshTrigger]);
 
-  // --- Chart Data Processing Logic (unchanged) ---
+  // --- Chart Data Processing Logic (no changes needed) ---
   useEffect(() => {
-    // This logic is complex but correct, no changes needed here.
     const chartDataMap = new Map<number, CustomTypes.ChartDataPoint>();
     const now = new Date();
     const displayHistoricalStartTime = new Date(now.getTime() - CHART_HISTORICAL_HOURS_DISPLAY * 60 * 60 * 1000).getTime();
     const currentHistoricalData = historicalData || [];
     const displayableHistoricalData = currentHistoricalData.filter(r => new Date(r.timestamp).getTime() >= displayHistoricalStartTime);
-    let latestActualTimestamp = Math.max(...displayableHistoricalData.map(r => new Date(r.timestamp).getTime()), 0);
+    const latestActualTimestamp = Math.max(...displayableHistoricalData.map(r => new Date(r.timestamp).getTime()), 0);
     const predictionAnchorTime = latestActualTimestamp || displayHistoricalStartTime;
 
     displayableHistoricalData.forEach(reading => {
@@ -111,24 +113,17 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
     setChartData(Array.from(chartDataMap.values()).sort((a, b) => a.timestamp - b.timestamp));
   }, [historicalData, forecastData]);
 
-
-  // --- UPDATED Simulation Handler ---
+  // --- Handler for Standard Simulation ---
   const handleRunSimulation = async () => {
     if (!selectedMeterId) return; 
-    
     setIsSimulating(true);
     setSimulationError(null);
-    setSimulationNotice(null); // Clear previous notices
+    setSimulationNotice(null);
 
     try {
-      // Dynamically set training hours based on model choice
-      const trainingHours = selectedModel === 'dl_model' ? 168 : 24; // 7 days for DL, 1 day for others
-
+      const trainingHours = selectedModel === 'dl_model' ? 168 : 24;
       const result = await apiService.triggerSimulation(
-        selectedMeterId, 
-        selectedPredictionHours,
-        selectedModel,
-        trainingHours
+        selectedMeterId, selectedPredictionHours, selectedModel, trainingHours,
       );
       
       let noticeMessage = `Simulation successful using the '${result.model_used}' model.`;
@@ -136,15 +131,31 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
         noticeMessage += ` NOTE: ${result.fallback_reason}`;
       }
       setSimulationNotice(noticeMessage);
-
-      onSimulationComplete(); // Trigger data refresh in parent component
-
+      onSimulationComplete();
     } catch (err: any) {
-      console.error("[Dashboard] Failed to trigger simulation:", err);
-      setSimulationError(err.message || "An unknown error occurred during simulation.");
+      setSimulationError(err.message || "An unknown error occurred.");
     } finally {
       setIsSimulating(false);
     }
+  };
+
+  // --- NEW: Handlers for Event Simulation Card ---
+  const handleEventSimStart = () => {
+    setIsSimulating(true);
+    setSimulationError(null);
+    setSimulationNotice(null);
+  };
+  
+  const handleEventSimComplete = (result: any) => {
+    // This function will be expanded in the next step to wire up the API.
+    console.log("Event simulation completed:", result);
+    setSimulationNotice("Event simulation finished. Chart will be updated in the next step.");
+    // We will eventually update the chart data here instead of a full refresh.
+    onSimulationComplete(); // For now, trigger a refresh to show DB changes.
+  };
+
+  const handleEventSimError = (errorMessage: string) => {
+    setSimulationError(errorMessage);
   };
 
   // --- RENDER LOGIC ---
@@ -165,13 +176,22 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
 
   return (
     <div className="space-y-6 sm:space-y-8">
+      {/* 1. Scraper controls at the top - this layout is untouched. */}
       <ScraperControl selectedMeterId={selectedMeterId} />
 
-      <div className="dashboard-controls">
-        {metrics && <MetricsCard metrics={metrics} />}
+      {/* 2. A specific grid container for ONLY the top two control cards. */}
+      <div className="top-cards-grid">
+        {/* Card 1: Forecasting Model Performance */}
+        {metrics ? (
+          <MetricsCard metrics={metrics} />
+        ) : (
+          <div className="card flex items-center justify-center min-h-[150px]">
+            <p className="no-data-text">Run a simulation to see metrics.</p>
+          </div>
+        )}
         
+        {/* Card 2: Standard Simulation Controls */}
         <div className="simulation-controls card">
-          {/* --- MODEL SELECTION DROPDOWN --- */}
           <div className="control-group">
             <label htmlFor="model-selector" className="control-label">Forecasting Model:</label>
             <select
@@ -187,7 +207,6 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
             </select>
           </div>
           
-          {/* --- HORIZON SELECTION DROPDOWN --- */}
           <div className="control-group">
             <label htmlFor="prediction-duration-main" className="control-label">Forecast Horizon:</label>
             <select
@@ -208,31 +227,47 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
             className="run-simulation-button"
             disabled={isSimulating || !selectedMeterId}
           >
-            {isSimulating ? <Spinner size="sm" /> : 'Run Simulation'}
+            {isSimulating ? <Spinner size="sm" /> : 'Run Standard Forecast'}
           </button>
         </div>
       </div>
       
-      {/* Display Simulation Notices & Errors */}
+      {/* 3. Display area for Simulation Notices & Errors */}
       {simulationNotice && <div className="notice success-notice">{simulationNotice}</div>}
-      {simulationError && <ErrorMessage message={simulationError} onRetry={handleRunSimulation} />}
+      {simulationError && <ErrorMessage message={simulationError} />}
       
-      {/* Main Data Display */}
+      {/* 4. Main Data Display Section - this will now render as a simple stack */}
       {!hasData && !loading ? (
         <div className="no-data-placeholder card">
           <h3 className="no-data-title">No Data Available</h3>
-          <p className="no-data-text">Start the scraper to collect data, then run a simulation.</p>
+          <p className="no-data-text">Start scraper to collect data.</p>
         </div>
       ) : (
         <>
           <div className="card">
             <h2 className="card-title">Demand Forecast vs. Actual</h2>
-            {chartData.length > 0 ? <DemandChart data={chartData} /> : <p className="no-data-text">Chart data is not available.</p>}
+            <DemandChart data={chartData} />
           </div>
+
           <div className="card">
             <h2 className="card-title">Latest Meter Readings</h2>
-            {latestReadings && latestReadings.length > 0 ? <ReadingsTable readings={latestReadings} /> : <p className="no-data-text">No recent readings found.</p>}
+            <ReadingsTable readings={latestReadings} />
           </div>
+          
+          {latestReadings && latestReadings.length > 0 && (
+            <GridStatusCard 
+             latestReadings={latestReadings}
+             historicalData={historicalData} 
+            />
+          )}
+
+          <EventSimulationCard 
+            meterId={selectedMeterId}
+            onSimulationStart={handleEventSimStart}
+            onSimulationComplete={handleEventSimComplete}
+            onSimulationError={handleEventSimError}
+            isSimulating={isSimulating}
+          />
         </>
       )}
     </div>
