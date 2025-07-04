@@ -69,165 +69,128 @@ class DigitalTwin:
     # In src/digital_twin.py
 
     def run_simulation(self,
-                    simulation_duration_hours: int = 24,
-                    prediction_horizon_hours: int = 24,
-                    model_name: str = "baseline_model",
-                    data_for_training_hours: int = 24,
-                    explicit_prediction_start_time: Optional[datetime] = None,
-                    explicit_prediction_end_time: Optional[datetime] = None) -> Dict[str, Any]:
+                   model_name: str,
+                   data_for_training_hours: int,
+                   simulation_duration_hours: int = 24,
+                   prediction_horizon_hours: int = 24,
+                   event_data: Optional[Dict[str, Any]] = None,
+                   explicit_prediction_start_time: Optional[datetime] = None,
+                   explicit_prediction_end_time: Optional[datetime] = None) -> Dict[str, Any]:
         """
-        Runs a simulation of energy demand, with graceful fallback to a simpler
-        model if the requested model's data requirements are not met.
+        Runs a comprehensive simulation of energy demand.
+
+        This method can perform two types of simulations:
+        1. Standard Forecast: Predicts future consumption from the latest data point.
+        2. Event Simulation/Backtest: Simulates a past period with an optional
+        event (e.g., a heatwave) to test model performance under what-if scenarios.
+
+        It includes graceful fallback to a baseline model if data requirements for
+        a complex model are not met.
 
         Args:
-            simulation_duration_hours (int): The total duration of the simulation in hours.
-            prediction_horizon_hours (int): How far into the future the model predicts.
             model_name (str): The name of the forecasting model to use.
-            data_for_training_hours (int): How many hours of recent historical data
-                                            to fetch for training the model before simulation.
-            explicit_prediction_start_time (Optional[datetime]): If provided, use this as the start time
-                                                                for predictions. Must be timezone-aware.
-            explicit_prediction_end_time (Optional[datetime]): If provided, use this as the end time
-                                                            for predictions. Must be timezone-aware.
+            data_for_training_hours (int): Hours of historical data for training.
+            simulation_duration_hours (int): Duration for a standard forecast.
+            prediction_horizon_hours (int): How far to predict in a standard forecast.
+            event_data (Optional[Dict]): An optional dictionary describing a simulated event.
+                                        e.g., {'type': 'heatwave', 'value': 5}
+            explicit_prediction_start_time (Optional[datetime]): The start time for a backtest.
+            explicit_prediction_end_time (Optional[datetime]): The end time for a backtest.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the results of the simulation,
-                            including which model was requested vs. used, metrics,
-                            and the predicted data.
+            A dictionary containing the full results of the simulation.
         """
-        logger.info(f"Starting simulation run for Meter {self.meter_id}. Requested model: '{model_name}'.")
+        if event_data:
+            logger.info(f"Starting EVENT simulation for Meter {self.meter_id} | Model: '{model_name}' | Event: {event_data}")
+        else:
+            logger.info(f"Starting simulation for Meter {self.meter_id} | Model: '{model_name}'")
 
-        # 1. GET HISTORICAL DATA
-        # This data will be used for both the fallback check and model training.
+        # 1. FETCH HISTORICAL DATA
         historical_data = self.get_historical_data(hours=data_for_training_hours)
+        if not historical_data:
+            # It's impossible to run any meaningful simulation without some data.
+            raise ValueError("Not enough historical data to run a simulation. Please scrape more data first.")
 
-        # 2. DECIDE WHICH MODEL TO USE (GRACEFUL FALLBACK LOGIC)
+        # 2. DECIDE WHICH MODEL TO USE (GRACEFUL FALLBACK)
         model_to_use = model_name
         fallback_reason = None
-        
         try:
-            # Temporarily load the requested model to check its data requirements.
-            requested_model = load_forecasting_model(model_name)
-            required_records = requested_model.get_required_history_count()
-            
+            requested_model_instance = load_forecasting_model(model_name)
+            required_records = requested_model_instance.get_required_history_count()
             if len(historical_data) < required_records:
-                logger.warning(
-                    f"Model '{model_name}' requires {required_records} records, "
-                    f"but only {len(historical_data)} are available. "
-                    f"Falling back to 'baseline_model'."
-                )
+                fallback_reason = (f"Insufficient data for '{model_name}' (had {len(historical_data)} of {required_records} required). Used baseline instead.")
+                logger.warning(fallback_reason)
                 model_to_use = "baseline_model"
-                fallback_reason = (
-                    f"Insufficient data for '{model_name}'. "
-                    f"Had {len(historical_data)} of {required_records} required records. Used baseline instead."
-                )
         except Exception as e:
-            logger.error(f"Failed to load requested model '{model_name}': {e}. Falling back to baseline.", exc_info=True)
+            fallback_reason = f"Could not load requested model '{model_name}'. Used baseline instead. Error: {e}"
+            logger.error(fallback_reason, exc_info=True)
             model_to_use = "baseline_model"
-            fallback_reason = f"Could not load requested model '{model_name}'. Used baseline instead."
-        
+
         # 3. LOAD & TRAIN THE FINAL MODEL
-        # Load the model that was determined to be usable (either the original or the fallback).
-        self.load_model(model_to_use)
-
+        # Pass params to load_model if we add hyperparameter tuning back in the future.
+        self.load_model(model_to_use) 
         if not self.forecasting_model:
-            # This is a critical failure if even the baseline model can't be loaded.
-            raise RuntimeError("Could not load any forecasting model, including the baseline.")
+            raise RuntimeError("Fatal: Could not load any forecasting model, including the baseline.")
+        
+        # Pass event data to the training step. This is crucial for events that modify 'kwh'.
+        self.forecasting_model.train(historical_data, event_data=event_data)
+        training_data_start = historical_data[0]['timestamp']
+        training_data_end = historical_data[-1]['timestamp']
 
-        try:
-            self.forecasting_model.train(historical_data)
-            training_data_start = historical_data[0]['timestamp'] if historical_data else None
-            training_data_end = historical_data[-1]['timestamp'] if historical_data else None
-        except Exception as e:
-            logger.error(f"Error during model training for Meter {self.meter_id} with model '{model_to_use}': {e}", exc_info=True)
-            # Return a dictionary indicating failure but also what happened.
-            return {
-                "meter_id": self.meter_id,
-                "model_requested": model_name,
-                "model_used": model_to_use,
-                "fallback_reason": "Model training failed.",
-                "metrics": {"mae": None, "rmse": None},
-                "run_id": None
-            }
-
-        # 4. DEFINE SIMULATION/PREDICTION TIME WINDOW
-        # This logic remains the same as your original version.
+        # 4. DEFINE SIMULATION TIME WINDOW
         if explicit_prediction_start_time and explicit_prediction_end_time:
             prediction_start_time = explicit_prediction_start_time
             prediction_end_time = explicit_prediction_end_time
-            logger.info(f"Using explicit prediction times: {prediction_start_time} to {prediction_end_time}")
+            logger.info(f"Using explicit backtest window: {prediction_start_time} to {prediction_end_time}")
         else:
-            if historical_data:
-                last_historical_timestamp = max(d['timestamp'] for d in historical_data)
-                prediction_start_time = last_historical_timestamp + timedelta(minutes=15)
-            else:
-                latest_reading = self.get_latest_real_reading()
-                if latest_reading:
-                    prediction_start_time = latest_reading['timestamp'] + timedelta(minutes=15)
-                else:
-                    now_tz = datetime.now(db_manager.get_timezone()).replace(second=0, microsecond=0)
-                    minutes_to_next_quarter = 15 - (now_tz.minute % 15) if now_tz.minute % 15 != 0 else 0
-                    prediction_start_time = now_tz + timedelta(minutes=minutes_to_next_quarter)
-                    logger.warning(f"No historical data; starting prediction from next quarter: {prediction_start_time}")
-            
+            # Standard forecast logic
+            last_historical_timestamp = max(d['timestamp'] for d in historical_data)
+            prediction_start_time = last_historical_timestamp + timedelta(minutes=15)
             prediction_end_time = prediction_start_time + timedelta(hours=prediction_horizon_hours)
-            logger.info(f"Inferred prediction times: {prediction_start_time} to {prediction_end_time}")
+            logger.info(f"Inferred forecast window: {prediction_start_time} to {prediction_end_time}")
 
         if prediction_start_time >= prediction_end_time:
-            logger.error("Prediction start time is on or after end time. Cannot generate forecast.")
-            prediction_end_time = prediction_start_time + timedelta(minutes=15)
+            raise ValueError("Prediction start time cannot be on or after the end time.")
 
         # 5. RECORD THE FORECAST RUN
         current_run_id = str(uuid.uuid4())
-        try:
-            db_manager.insert_forecast_run(
-                run_id=current_run_id,
-                meter_id=self.meter_id,
-                model_name=model_to_use,  # IMPORTANT: Log the model that was actually used
-                prediction_start_time=prediction_start_time,
-                prediction_end_time=prediction_end_time,
-                training_data_start=training_data_start,
-                training_data_end=training_data_end
-            )
-            logger.info(f"New forecast run initiated with ID: {current_run_id}")
-        except Exception as e:
-            logger.error(f"Failed to record forecast run in DB: {e}", exc_info=True)
-            current_run_id = None # Ensure run_id is None if DB write fails
+        db_manager.insert_forecast_run(
+            run_id=current_run_id, meter_id=self.meter_id, model_name=model_to_use,
+            prediction_start_time=prediction_start_time, prediction_end_time=prediction_end_time,
+            training_data_start=training_data_start, training_data_end=training_data_end
+        )
+        logger.info(f"New forecast run initiated with ID: {current_run_id}")
 
         # 6. GENERATE FORECASTS
         simulated_readings_output = self.forecasting_model.predict(
             start_timestamp=prediction_start_time,
             end_timestamp=prediction_end_time,
-            historical_data=historical_data,  # Pass historical data to the predict method
-            frequency=timedelta(minutes=30)
+            historical_data=historical_data,
+            frequency=timedelta(minutes=30),
+            event_data=event_data # Pass event data to the prediction step
         )
         logger.info(f"Generated {len(simulated_readings_output)} simulated readings.")
 
-        # 7. FETCH ACTUALS & CALCULATE METRICS
+        # 7. EVALUATE & STORE RESULTS
         actuals_in_simulation_range = db_manager.get_meter_readings_in_range(
             self.meter_id, prediction_start_time, prediction_end_time
         )
         metrics = calculate_forecast_metrics(actuals_in_simulation_range, simulated_readings_output)
+        
+        predictions_to_store = []
+        actual_map = {a['timestamp']: a['energy_kwh_import'] for a in actuals_in_simulation_range}
+        for pred in simulated_readings_output:
+            predictions_to_store.append({
+                'timestamp': pred['timestamp'],
+                'predicted_kwh': pred['predicted_kwh'],
+                'actual_kwh': actual_map.get(pred['timestamp'])
+            })
+        
+        db_manager.insert_forecast_predictions(current_run_id, predictions_to_store)
+        if metrics.get('mae') is not None:
+            db_manager.update_forecast_run_metrics(current_run_id, mae=metrics.get('mae'), rmse=metrics.get('rmse'))
 
-        # 8. STORE PREDICTIONS & UPDATE RUN METRICS
-        if current_run_id:
-            predictions_to_store = []
-            actual_map = {a['timestamp']: a['energy_kwh_import'] for a in actuals_in_simulation_range}
-            for pred in simulated_readings_output:
-                predictions_to_store.append({
-                    'timestamp': pred['timestamp'],
-                    'predicted_kwh': pred['predicted_kwh'],
-                    'actual_kwh': actual_map.get(pred['timestamp'])
-                })
-            
-            try:
-                db_manager.insert_forecast_predictions(current_run_id, predictions_to_store)
-                if metrics.get('mae') is not None:
-                    db_manager.update_forecast_run_metrics(current_run_id, mae=metrics.get('mae'), rmse=metrics.get('rmse'))
-            except Exception as e:
-                logger.error(f"Failed to store predictions or metrics for run {current_run_id}: {e}", exc_info=True)
-
-        # 9. RETURN COMPLETE RESULTS
+        # 8. RETURN COMPLETE RESULTS
         return {
             "meter_id": self.meter_id,
             "model_requested": model_name,

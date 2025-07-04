@@ -4,6 +4,7 @@ import logging
 import logging.handlers
 import os
 from datetime import datetime, timedelta, timezone
+from dateutil.parser import isoparse
 import sys
 import json
 from flask import Flask, jsonify, request
@@ -226,56 +227,72 @@ def run_api_server_command(args):
         return jsonify(run_details)
 
     
-
     @flask_app.route('/api/meters/<meter_id>/simulate', methods=['POST'])
     def trigger_simulation_endpoint(meter_id):
         """
         Triggers a forecasting simulation for a given meter.
-        Handles different models and ensures sufficient data is requested for complex models.
+        This single endpoint handles both standard forecasts and event-based backtests.
         """
         try:
             data = request.get_json()
             if not data:
                 return jsonify({"message": "Request body must be JSON.", "status": "error"}), 400
 
-            # --- Extract and validate parameters ---
-            duration_hours = int(data.get('duration_hours', 24))
+            # --- Extract all possible parameters ---
             model_name = str(data.get('model_name', "baseline_model"))
+            training_hours = int(data.get('training_hours', 24 * 14)) # Default to 2 weeks
+            duration_hours = int(data.get('duration_hours', 24))
+            event_data = data.get('event', None)
+            start_time_str = data.get('explicit_prediction_start_time', None)
+            end_time_str = data.get('explicit_prediction_end_time', None)
             
-            # Set a reasonable default for training hours
-            default_training_hours = 24 * 7 * 2  # 2 weeks
-            training_hours = int(data.get('training_hours', default_training_hours))
-            
-            # --- Logic to enforce minimum data for specific models ---
-            # This is a good place to ensure you request enough data for the DL model
-            # to avoid unnecessary fallbacks caused by a small frontend request.
-            if model_name == 'dl_model' and training_hours < 168: # 168 hours = 7 days
-                logger.warning(
-                    f"DL model requested with only {training_hours} hours of history. "
-                    f"Increasing to the required minimum of 168 hours."
-                )
-                training_hours = 168
+            # --- Prepare arguments dictionary for the DigitalTwin ---
+            kwargs_for_simulation = {
+                "model_name": model_name,
+                "data_for_training_hours": training_hours,
+                "event_data": event_data,
+            }
+
+            # --- Logic to differentiate between a backtest and a standard forecast ---
+            if start_time_str and end_time_str:
+                logger.info(f"Received backtest/event simulation request for meter '{meter_id}'.")
+                
+                start_time = isoparse(start_time_str)
+                end_time = isoparse(end_time_str)
+                
+                # --- THIS IS THE FIX: Localize naive datetimes from the frontend ---
+                app_tz = db_manager.get_timezone()
+                if start_time.tzinfo is None:
+                    start_time = app_tz.localize(start_time)
+                    logger.info(f"Localized naive start_time to: {start_time}")
+                if end_time.tzinfo is None:
+                    end_time = app_tz.localize(end_time)
+                    logger.info(f"Localized naive end_time to: {end_time}")
+
+                kwargs_for_simulation['explicit_prediction_start_time'] = start_time
+                kwargs_for_simulation['explicit_prediction_end_time'] = end_time
+            else:
+                logger.info(f"Received standard forecast request for meter '{meter_id}'.")
+                kwargs_for_simulation['simulation_duration_hours'] = duration_hours
+                kwargs_for_simulation['prediction_horizon_hours'] = duration_hours
+
+            # Enforce minimum training data for the DL model
+            if model_name == 'dl_model' and kwargs_for_simulation.get("data_for_training_hours", 0) < 168:
+                logger.warning(f"DL model requested; increasing training data to minimum of 168 hours.")
+                kwargs_for_simulation['data_for_training_hours'] = 168
 
             # --- Run the simulation ---
             twin = DigitalTwin(meter_id=meter_id)
-            results = twin.run_simulation(
-                simulation_duration_hours=duration_hours,
-                prediction_horizon_hours=duration_hours, # Assuming these are the same for now
-                model_name=model_name,
-                data_for_training_hours=training_hours
-            )
+            results = twin.run_simulation(**kwargs_for_simulation)
             
-            # --- Process results for a clean JSON response ---
+            # --- Process and return results ---
             simulation_metrics = results.get('metrics', {})
-            
-            # Your excellent NaN handling logic
+            # NaN handling
             if 'mae' in simulation_metrics and isinstance(simulation_metrics['mae'], float) and simulation_metrics['mae'] != simulation_metrics['mae']:
                 simulation_metrics['mae'] = None
             if 'rmse' in simulation_metrics and isinstance(simulation_metrics['rmse'], float) and simulation_metrics['rmse'] != simulation_metrics['rmse']:
                 simulation_metrics['rmse'] = None
 
-            # --- Construct the new, informative response payload ---
-            # This payload now includes details about model fallback
             response_data = {
                 "message": "Simulation completed successfully.",
                 "status": "success",
@@ -283,22 +300,23 @@ def run_api_server_command(args):
                 "metrics": simulation_metrics,
                 "model_requested": results.get('model_requested'),
                 "model_used": results.get('model_used'),
-                "fallback_reason": results.get('fallback_reason')
+                "fallback_reason": results.get('fallback_reason'),
+                "forecast_points": results.get('simulated_readings'),
+                "actual_readings_in_sim_range": results.get('actual_readings_in_sim_range'),
+                "simulation_start": results.get('simulation_start'),
+                "simulation_end": results.get('simulation_end')
             }
             
             return jsonify(response_data), 200
 
-        except (ValueError, KeyError) as e:
-            # Catches issues from bad request data (e.g., non-integer hours)
-            # or from errors raised within the simulation (e.g., "Not enough data")
-            logger.warning(f"Simulation for meter '{meter_id}' failed with a client or data error: {str(e)}")
-            return jsonify({"message": str(e), "status": "error"}), 400
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning(f"Simulation for '{meter_id}' failed with a client data error: {str(e)}", exc_info=True)
+            return jsonify({"message": f"Invalid request parameter or data: {str(e)}", "status": "error"}), 400
             
         except Exception as e:
-            # Catch-all for unexpected server errors
             logger.error(f"Unhandled error during simulation for meter '{meter_id}': {e}", exc_info=True)
             return jsonify({"message": "An internal server error occurred during the simulation.", "status": "error"}), 500
-        
+                    
     @flask_app.route('/api/scraper/start', methods=['POST'])
     def start_scraper_endpoint():
         data = request.get_json()

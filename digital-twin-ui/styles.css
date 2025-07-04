@@ -662,6 +662,29 @@ body {
   border: 1px solid #334155;
 }
 
+
+.backtest-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: rgba(59, 130, 246, 0.2); /* bg-blue-500/20 */
+  border: 1px solid #3b82f6; /* border-blue-500 */
+}
+
+.backtest-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #93c5fd; /* text-blue-300 */
+}
+
+.backtest-header .button {
+  background-color: #3b82f6;
+}
+
+.backtest-header .button:hover {
+  background-color: #2563eb;
+}
+
 /* --- Grid Status Card (No changes, included for completeness) --- */
 .grid-status-card { display: flex; flex-direction: column; }
 .grid-status-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; flex-grow: 1; padding-bottom: 1rem; }

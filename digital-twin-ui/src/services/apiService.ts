@@ -125,3 +125,36 @@ export const fetchScraperLogs = async (meterId: string, lines: number = 50): Pro
   const response = await fetch(`${API_BASE_URL}/scraper/logs?meter_id=${meterId}&lines=${lines}`);
   return handleResponse<CustomTypes.ScraperLogResponse>(response);
 };
+
+
+export const triggerEventSimulation = async (
+  meterId: string,
+  modelName: string,
+  trainingHours: number,
+  simulationStartDate: string, // e.g., '2023-10-26'
+  simulationEndDate: string,   // e.g., '2023-10-27'
+  event: { type: string; value: number } | null
+): Promise<CustomTypes.SimulationResponse> => {
+
+  const body: { [key: string]: any } = {
+    model_name: modelName,
+    training_hours: trainingHours,
+    // The backend will parse these date strings
+    explicit_prediction_start_time: `${simulationStartDate}T00:00:00`,
+    explicit_prediction_end_time: `${simulationEndDate}T23:59:59`,
+  };
+
+  // Only add the event object to the payload if one is selected
+  if (event && event.type !== 'none') {
+    body.event = event;
+  }
+
+  const response = await fetch(`${API_BASE_URL}/meters/${meterId}/simulate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  // We can reuse the same handleResponse and SimulationResponse type
+  return handleResponse<CustomTypes.SimulationResponse>(response);
+};

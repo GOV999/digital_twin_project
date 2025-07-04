@@ -18,7 +18,7 @@ import Spinner from './Spinner';
 import ErrorMessage from './ErrorMessage';
 import ScraperControl from './ScraperControl';
 import GridStatusCard from './GridStatusCard';
-import EventSimulationCard from './EventSimulationCard'; // <-- Import the new card
+import EventSimulationCard from './EventSimulationCard';
 
 interface DashboardProps {
   selectedMeterId: string;
@@ -39,6 +39,9 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   const [latestReadings, setLatestReadings] = useState<CustomTypes.MeterReading[] | null>(null);
   const [chartData, setChartData] = useState<CustomTypes.ChartDataPoint[]>([]);
   
+  // --- NEW: State to hold the results of a specific backtest/event simulation ---
+  const [backtestData, setBacktestData] = useState<CustomTypes.SimulationResponse | null>(null);
+
   // --- State for UI Controls & Status ---
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +53,6 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   const [selectedPredictionHours, setSelectedPredictionHours] = useState<number>(PREDICTION_DURATION_OPTIONS[0].value);
   const [selectedModel, setSelectedModel] = useState<string>(MODEL_OPTIONS[0].value);
 
-  // --- Data Fetching Logic ---
   const loadDashboardData = useCallback(async () => {
     if (!selectedMeterId) return;
     setLoading(true);
@@ -74,64 +76,82 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
   }, [selectedMeterId]);
 
   useEffect(() => {
+    // When the meter changes or a refresh is triggered, clear any old backtest data.
+    setBacktestData(null);
     loadDashboardData();
   }, [loadDashboardData, refreshTrigger]);
 
-  // --- Chart Data Processing Logic (no changes needed) ---
+  // --- MODIFIED: Chart Data Processing Logic ---
   useEffect(() => {
     const chartDataMap = new Map<number, CustomTypes.ChartDataPoint>();
-    const now = new Date();
-    const displayHistoricalStartTime = new Date(now.getTime() - CHART_HISTORICAL_HOURS_DISPLAY * 60 * 60 * 1000).getTime();
-    const currentHistoricalData = historicalData || [];
-    const displayableHistoricalData = currentHistoricalData.filter(r => new Date(r.timestamp).getTime() >= displayHistoricalStartTime);
-    const latestActualTimestamp = Math.max(...displayableHistoricalData.map(r => new Date(r.timestamp).getTime()), 0);
-    const predictionAnchorTime = latestActualTimestamp || displayHistoricalStartTime;
+    const isBacktestView = backtestData !== null;
 
-    displayableHistoricalData.forEach(reading => {
-      const ts = new Date(reading.timestamp).getTime();
-      chartDataMap.set(ts, {
-          timestamp: ts,
-          dateLabel: new Date(reading.timestamp).toLocaleString(),
-          actual: (typeof reading.energy_kwh_import === 'number') ? reading.energy_kwh_import : undefined,
-          predicted: undefined 
-      });
+    // Use all historical data as the base for building the chart
+    const historicalSource = historicalData || [];
+    historicalSource.forEach(reading => {
+        const ts = new Date(reading.timestamp).getTime();
+        chartDataMap.set(ts, {
+            timestamp: ts,
+            dateLabel: new Date(reading.timestamp).toLocaleString(),
+            actual: reading.energy_kwh_import ?? undefined,
+            predicted: undefined 
+        });
     });
 
-    const currentForecastData = forecastData || [];
-    currentForecastData.forEach((point) => { 
-      const ts = new Date(point.timestamp).getTime();
-      const predictedValue = (typeof point.predicted_kwh === 'number') ? point.predicted_kwh : undefined; 
-      let entry = chartDataMap.get(ts);
-      if (!entry) {
-        entry = { timestamp: ts, dateLabel: new Date(point.timestamp).toLocaleString(), actual: undefined, predicted: predictedValue };
-      } else {
-        entry.predicted = predictedValue;
-      }
-      chartDataMap.set(ts, entry); 
-    });
+    // Determine the source of forecast points
+    const forecastSource = isBacktestView ? (backtestData.forecast_points || []) : (forecastData || []);
     
-    setChartData(Array.from(chartDataMap.values()).sort((a, b) => a.timestamp - b.timestamp));
-  }, [historicalData, forecastData]);
+    forecastSource.forEach((point) => { 
+        const ts = new Date(point.timestamp).getTime();
+        const predictedValue = point.predicted_kwh ?? undefined;
+        let entry = chartDataMap.get(ts);
+        if (entry) {
+            entry.predicted = predictedValue;
+        } else {
+            entry = { timestamp: ts, dateLabel: new Date(point.timestamp).toLocaleString(), actual: undefined, predicted: predictedValue };
+        }
+        chartDataMap.set(ts, entry); 
+    });
 
-  // --- Handler for Standard Simulation ---
+    let finalChartData = Array.from(chartDataMap.values());
+
+    // Filter the data to the correct time window
+    if (isBacktestView) {
+        // For a backtest, show only the simulated time range
+        const startTime = new Date(backtestData.simulation_start!).getTime();
+        const endTime = new Date(backtestData.simulation_end!).getTime();
+        finalChartData = finalChartData.filter(d => d.timestamp >= startTime && d.timestamp <= endTime);
+    } else {
+        // For the live view, show the default historical window
+        const now = new Date();
+        const displayHistoricalStartTime = new Date(now.getTime() - CHART_HISTORICAL_HOURS_DISPLAY * 60 * 60 * 1000).getTime();
+        finalChartData = finalChartData.filter(d => d.timestamp >= displayHistoricalStartTime);
+    }
+
+    setChartData(finalChartData.sort((a, b) => a.timestamp - b.timestamp));
+    
+  }, [historicalData, forecastData, backtestData]); // This effect now re-runs when backtestData changes
+
+  // --- Handlers for Simulations ---
   const handleRunSimulation = async () => {
     if (!selectedMeterId) return; 
     setIsSimulating(true);
     setSimulationError(null);
     setSimulationNotice(null);
+    setBacktestData(null); // Clear any backtest view when running a new live forecast
 
     try {
       const trainingHours = selectedModel === 'dl_model' ? 168 : 24;
       const result = await apiService.triggerSimulation(
-        selectedMeterId, selectedPredictionHours, selectedModel, trainingHours,
+        selectedMeterId, selectedPredictionHours, selectedModel, trainingHours
       );
       
-      let noticeMessage = `Simulation successful using the '${result.model_used}' model.`;
+      let noticeMessage = `Live forecast updated using the '${result.model_used}' model.`;
       if (result.fallback_reason) {
         noticeMessage += ` NOTE: ${result.fallback_reason}`;
       }
       setSimulationNotice(noticeMessage);
-      onSimulationComplete();
+      onSimulationComplete(); // Trigger a full refresh for live data
     } catch (err: any) {
       setSimulationError(err.message || "An unknown error occurred.");
     } finally {
@@ -139,31 +159,39 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
     }
   };
 
-  // --- NEW: Handlers for Event Simulation Card ---
   const handleEventSimStart = () => {
     setIsSimulating(true);
     setSimulationError(null);
     setSimulationNotice(null);
   };
   
-  const handleEventSimComplete = (result: any) => {
-    // This function will be expanded in the next step to wire up the API.
-    console.log("Event simulation completed:", result);
-    setSimulationNotice("Event simulation finished. Chart will be updated in the next step.");
-    // We will eventually update the chart data here instead of a full refresh.
-    onSimulationComplete(); // For now, trigger a refresh to show DB changes.
+  const handleEventSimComplete = (result: CustomTypes.SimulationResponse) => {
+    // Directly update the state with the simulation result
+    setBacktestData(result); 
+    // Also update the main metrics card with the result of this backtest
+    if (result.metrics && result.run_id) {
+        const newMetrics: CustomTypes.ForecastRunDetails = {
+            run_id: result.run_id, meter_id: selectedMeterId,
+            model_name: result.model_used || 'unknown',
+            mae: result.metrics.mae, rmse: result.metrics.rmse,
+            run_timestamp: new Date().toISOString()
+        };
+        setMetrics(newMetrics);
+    }
+    setSimulationNotice("Event simulation finished. Displaying backtest results.");
+    setIsSimulating(false);
   };
 
   const handleEventSimError = (errorMessage: string) => {
     setSimulationError(errorMessage);
+    setIsSimulating(false);
   };
 
-  // --- RENDER LOGIC ---
   if (loading && !isSimulating) { 
     return (
       <div className="card spinner-container" style={{padding: '2.5rem'}}>
         <Spinner />
-        <p className="mt-4 text-xl text-sky-300">Loading dashboard for Meter {selectedMeterId}...</p>
+        <p className="mt-4 text-xl text-sky-300">Loading dashboard...</p>
       </div>
     );
   }
@@ -176,67 +204,36 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
 
   return (
     <div className="space-y-6 sm:space-y-8">
-      {/* 1. Scraper controls at the top - this layout is untouched. */}
+      {/* 1. Scraper controls are untouched */}
       <ScraperControl selectedMeterId={selectedMeterId} />
 
-      {/* 2. A specific grid container for ONLY the top two control cards. */}
+      {/* 2. Top control cards for standard forecast are untouched */}
       <div className="top-cards-grid">
-        {/* Card 1: Forecasting Model Performance */}
-        {metrics ? (
-          <MetricsCard metrics={metrics} />
-        ) : (
-          <div className="card flex items-center justify-center min-h-[150px]">
-            <p className="no-data-text">Run a simulation to see metrics.</p>
-          </div>
-        )}
-        
-        {/* Card 2: Standard Simulation Controls */}
+        <MetricsCard metrics={metrics} />
         <div className="simulation-controls card">
           <div className="control-group">
             <label htmlFor="model-selector" className="control-label">Forecasting Model:</label>
-            <select
-              id="model-selector"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="meter-selector-select"
-              disabled={isSimulating}
-            >
-              {MODEL_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
+            <select id="model-selector" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="meter-selector-select" disabled={isSimulating}>
+              {MODEL_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
-          
           <div className="control-group">
             <label htmlFor="prediction-duration-main" className="control-label">Forecast Horizon:</label>
-            <select
-              id="prediction-duration-main"
-              value={selectedPredictionHours}
-              onChange={(e) => setSelectedPredictionHours(Number(e.target.value))}
-              className="meter-selector-select"
-              disabled={isSimulating}
-            >
-              {PREDICTION_DURATION_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
+            <select id="prediction-duration-main" value={selectedPredictionHours} onChange={(e) => setSelectedPredictionHours(Number(e.target.value))} className="meter-selector-select" disabled={isSimulating}>
+              {PREDICTION_DURATION_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
-
-          <button
-            onClick={handleRunSimulation}
-            className="run-simulation-button"
-            disabled={isSimulating || !selectedMeterId}
-          >
+          <button onClick={handleRunSimulation} className="run-simulation-button" disabled={isSimulating || !selectedMeterId}>
             {isSimulating ? <Spinner size="sm" /> : 'Run Standard Forecast'}
           </button>
         </div>
       </div>
       
-      {/* 3. Display area for Simulation Notices & Errors */}
+      {/* 3. Display area for notices and errors from the STANDARD simulation */}
       {simulationNotice && <div className="notice success-notice">{simulationNotice}</div>}
       {simulationError && <ErrorMessage message={simulationError} />}
       
-      {/* 4. Main Data Display Section - this will now render as a simple stack */}
+      {/* 4. Main Data Display Section */}
       {!hasData && !loading ? (
         <div className="no-data-placeholder card">
           <h3 className="no-data-title">No Data Available</h3>
@@ -244,11 +241,13 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
         </div>
       ) : (
         <>
+          {/* Main "Live" Demand Chart */}
           <div className="card">
             <h2 className="card-title">Demand Forecast vs. Actual</h2>
             <DemandChart data={chartData} />
           </div>
 
+          {/* Readings and Grid Status are unchanged */}
           <div className="card">
             <h2 className="card-title">Latest Meter Readings</h2>
             <ReadingsTable readings={latestReadings} />
@@ -261,12 +260,12 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedMeterId, refreshTrigger, 
             />
           )}
 
+          {/* --- MODIFIED: The EventSimulationCard is now self-contained --- */}
+          {/* It receives the meter ID and the global simulation lock state */}
           <EventSimulationCard 
             meterId={selectedMeterId}
-            onSimulationStart={handleEventSimStart}
-            onSimulationComplete={handleEventSimComplete}
-            onSimulationError={handleEventSimError}
             isSimulating={isSimulating}
+            setIsSimulating={setIsSimulating}
           />
         </>
       )}
